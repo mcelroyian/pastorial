@@ -1,0 +1,1 @@
+# This file makes Python treat the `resources` directory as a package.
