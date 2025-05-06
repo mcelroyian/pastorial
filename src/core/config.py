@@ -1,5 +1,7 @@
 # Game and Simulation Configuration
 
+from ..resources.resource_types import ResourceType # Import for RESOURCE_VISUAL_COLORS
+
 # Screen dimensions
 SCREEN_WIDTH = 1280
 SCREEN_HEIGHT = 720
@@ -28,3 +30,16 @@ RESOURCE_FONT_SIZE = 16
 # NODE_SIZE = GRID_CELL_SIZE # Optional: Use if node size differs from grid cell
 # Agent Settings
 AGENT_SPEED = 5.0 # Grid units per second
+DEFAULT_AGENT_INVENTORY_CAPACITY = 5 # Max items an agent can carry
+
+# Agent Action Timings
+DEFAULT_GATHERING_TIME = 2.0 # Seconds to gather a resource
+DEFAULT_DELIVERY_TIME = 1.0  # Seconds to deliver a resource
+
+# Resource Visuals (used by agent draw for carried items)
+RESOURCE_VISUAL_COLORS = {
+    ResourceType.BERRY: (220, 20, 60),   # Crimson for BERRY
+    ResourceType.WHEAT: (218, 165, 32),  # Goldenrod for WHEAT
+    # Add other resource type colors here as they are defined
+    # Example: ResourceType.WATER: (0, 191, 255) # Deep Sky Blue
+}
