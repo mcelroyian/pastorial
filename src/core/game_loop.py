@@ -1,12 +1,14 @@
 import pygame
 import time
-import random # Added for random placement
+import random
+from pygame.math import Vector2 # Added for agent positions
 from src.core import config
 from src.input import handlers as input_handlers
-from src.rendering import grid as grid_renderer
+from src.rendering.grid import Grid # Changed from grid_renderer function to Grid class
 from src.rendering import debug_display as debug_renderer
-from src.resources.manager import ResourceManager # Added
-from src.resources.berry_bush import BerryBush # Added
+from src.resources.manager import ResourceManager
+from src.resources.berry_bush import BerryBush
+from src.agents.manager import AgentManager # Added AgentManager
 
 class GameLoop:
     """
@@ -21,6 +23,15 @@ class GameLoop:
         self.accumulator = 0.0
         self.dt = 1.0 / config.TARGET_FPS # Timestep duration
 
+        # Initialize Grid
+        try:
+            self.grid = Grid()
+        except ValueError as e:
+            print(f"FATAL: Grid initialization failed: {e}")
+            # Consider how to handle this - maybe raise exception or exit?
+            # For now, let's assume config is valid.
+            raise # Re-raise the exception to stop execution if grid fails
+
         # Initialize font for resource display (ensure pygame.font.init() was called in main)
         try:
             self.resource_font = pygame.font.Font(None, config.RESOURCE_FONT_SIZE)
@@ -32,7 +43,29 @@ class GameLoop:
 
         # Initialize Resource Manager and spawn initial resources
         self.resource_manager = ResourceManager()
-        self._spawn_initial_resources()
+        self._spawn_initial_resources() # Uses screen coords currently
+
+        # Initialize Agent Manager and spawn initial agents
+        self.agent_manager = AgentManager(grid=self.grid)
+        self._spawn_initial_agents() # Uses grid coords
+
+    def _spawn_initial_agents(self):
+        """Creates and places the initial agents."""
+        # Example: Spawn agents at specific grid coordinates
+        # Ensure these coordinates are valid for the grid size
+        initial_positions = [Vector2(5, 5), Vector2(10, 15)]
+        agent_speed = config.AGENT_SPEED # Assuming this exists in config
+
+        print(f"Spawning {len(initial_positions)} agents...") # DEBUG
+        for pos in initial_positions:
+            if self.grid.is_within_bounds(pos):
+                agent = self.agent_manager.create_agent(position=pos, speed=agent_speed)
+                # Optionally set initial state or target
+                # agent.state = AgentState.MOVING_RANDOMLY
+                print(f"  Spawned Agent at grid position {pos}") # DEBUG
+            else:
+                print(f"Warning: Initial agent position {pos} is outside grid bounds ({self.grid.width_in_cells}x{self.grid.height_in_cells}). Skipping.")
+
 
     def handle_input(self):
         """Handles user input using the input handler module."""
@@ -57,18 +90,23 @@ class GameLoop:
         # Update resource nodes
         self.resource_manager.update_nodes(dt)
 
+        # Update agents
+        self.agent_manager.update_agents(dt)
+
         # Placeholder for other game entity updates
-        pass
 
     def render(self):
         """Renders the current game state."""
         self.screen.fill(config.COLOR_BLACK) # Clear screen
 
-        # Draw the grid
-        grid_renderer.draw_grid(self.screen)
+        # Draw the grid using the Grid object
+        self.grid.draw(self.screen)
 
         # Draw resource nodes
         self.resource_manager.draw_nodes(self.screen, self.resource_font)
+
+        # Draw agents
+        self.agent_manager.render_agents(self.screen, self.grid)
 
         # Draw debug info (FPS)
         # Use clock attribute directly for FPS calculation
