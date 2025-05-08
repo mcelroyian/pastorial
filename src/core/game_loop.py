@@ -78,12 +78,14 @@ class GameLoop:
         spawn_margin = 50 # Avoid spawning too close to screen edges
         for _ in range(config.INITIAL_BERRY_BUSHES):
             # Ensure bushes are placed within screen bounds, respecting margin
-            pos_x = random.uniform(spawn_margin, config.SCREEN_WIDTH - spawn_margin)
-            pos_y = random.uniform(spawn_margin, config.SCREEN_HEIGHT - spawn_margin)
-            position = pygame.Vector2(pos_x, pos_y)
-            bush = BerryBush(position)
+            screen_pos_x = random.uniform(spawn_margin, config.SCREEN_WIDTH - spawn_margin)
+            screen_pos_y = random.uniform(spawn_margin, config.SCREEN_HEIGHT - spawn_margin)
+            screen_position = pygame.Vector2(screen_pos_x, screen_pos_y)
+            grid_position = self.grid.screen_to_grid(screen_position) # Convert to grid coordinates
+            
+            bush = BerryBush(grid_position) # Pass grid coordinates
             self.resource_manager.add_node(bush)
-            print(f"  Spawned BerryBush at {position}") # DEBUG
+            print(f"DEBUG: Spawned BerryBush at screen_pos: {screen_position}, which is grid_pos: {grid_position}. Bush stores: {bush.position}")
 
     def update(self, dt):
         """Updates game state, including resource nodes."""
@@ -91,7 +93,7 @@ class GameLoop:
         self.resource_manager.update_nodes(dt)
 
         # Update agents
-        self.agent_manager.update_agents(dt)
+        self.agent_manager.update_agents(dt, self.resource_manager)
 
         # Placeholder for other game entity updates
 
@@ -103,7 +105,7 @@ class GameLoop:
         self.grid.draw(self.screen)
 
         # Draw resource nodes
-        self.resource_manager.draw_nodes(self.screen, self.resource_font)
+        self.resource_manager.draw_nodes(self.screen, self.resource_font, self.grid) # Pass grid object
 
         # Draw agents
         self.agent_manager.render_agents(self.screen, self.grid)

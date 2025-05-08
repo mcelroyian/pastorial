@@ -1,6 +1,7 @@
 import pygame
 from typing import List
 from .agent import Agent # Relative import from the same package
+from ..resources.resource_types import ResourceType
 
 class AgentManager:
     """Manages all agents in the simulation."""
@@ -31,15 +32,16 @@ class AgentManager:
             Agent: The newly created agent instance.
         """
         # Pass the stored grid object to the Agent constructor
-        new_agent = Agent(position=position, speed=speed, grid=self.grid)
+        new_agent = Agent(position=position, speed=speed, grid=self.grid, resource_priorities=[ResourceType.BERRY],  # Example priority
+                        inventory_capacity=5)
         self.add_agent(new_agent)
         print(f"Created agent at {position}") # Debug
         return new_agent
 
-    def update_agents(self, dt: float):
+    def update_agents(self, dt: float, resource_manager):
         """Updates all managed agents."""
         for agent in self.agents:
-            agent.update(dt)
+            agent.update(dt, resource_manager)
 
     def render_agents(self, screen: pygame.Surface, grid):
         """Renders all managed agents."""

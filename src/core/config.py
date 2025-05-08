@@ -20,8 +20,8 @@ DEBUG_TEXT_COLOR = COLOR_WHITE
 
 # Resource Node Settings
 BERRY_BUSH_COLOR = (0, 128, 0)  # Green
-BERRY_BUSH_CAPACITY = 100
-BERRY_BUSH_GENERATION_RATE = 5.0 # Resources per second
+BERRY_BUSH_CAPACITY = 10
+BERRY_BUSH_GENERATION_RATE = 0.15 # Resources per second
 INITIAL_BERRY_BUSHES = 10
 
 # Resource Display Settings

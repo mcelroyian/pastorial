@@ -34,6 +34,8 @@ def main():
     try:
         game = GameLoop(screen)
     except Exception as e:
+        print(f"FATAL: Error during game.run(): {e}")  # DEBUG
+        raise  # Re-raise the exception to see the full traceback
         pygame.quit()
         sys.exit(1)
 
@@ -41,7 +43,7 @@ def main():
         game.run()
     except Exception as e:
         print(f"FATAL: Error during game.run(): {e}") # DEBUG
-
+        raise
 
     # Quit Pygame and exit the program
     pygame.quit()

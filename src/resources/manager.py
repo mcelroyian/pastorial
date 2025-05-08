@@ -60,17 +60,18 @@ class ResourceManager:
         for node in self.nodes:
             node.update(dt)
 
-    def draw_nodes(self, surface: pygame.Surface, font: pygame.font.Font):
+    def draw_nodes(self, surface: pygame.Surface, font: pygame.font.Font, grid): # Add grid parameter
         """
         Draws all managed resource nodes.
 
         Args:
             surface: The pygame surface to draw on.
             font: The pygame font to use for rendering text on nodes.
+            grid: The game grid object for coordinate conversions.
         """
         for node in self.nodes:
-            node.draw(surface, font)
+            node.draw(surface, font, grid) # Pass grid to node's draw method
         # Optionally, draw storage points too
         # for sp in self.storage_points:
         #     if hasattr(sp, 'draw'): # Check if storage_point has a draw method
-        #         sp.draw(surface, self.grid) # Assuming storage_point.draw takes screen and grid
+        #         sp.draw(surface, font, grid) # Assuming storage_point.draw also needs font and grid

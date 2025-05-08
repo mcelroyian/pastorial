@@ -80,7 +80,7 @@ class Agent:
         """Sets the agent's target position and changes state."""
         self.target_position = target_position
         self.state = AgentState.MOVING_TO_TARGET
-        print(f"Agent at {self.position} set target to {self.target_position}") # Debug
+        print(f"DEBUG: Agent.set_target (generic): AgentGridPos={self.position}, NewTargetGridPos={self.target_position}, State={self.state.name}")
 
     def _move_towards_target(self, dt: float) -> bool:
         """
@@ -93,33 +93,32 @@ class Agent:
             bool: True if the target was reached this frame, False otherwise.
         """
         if self.target_position is None:
-            # self.state = AgentState.IDLE # State changes handled by caller
-            return False # Or True if no target means "at target", but False seems more logical
+            # print(f"DEBUG: Agent._move_towards_target: No target for agent at {self.position}, state {self.state.name}") # Can be noisy
+            return False
 
-
+        print(f"DEBUG: Agent._move_towards_target PRE-MOVE: AgentGridPos={self.position}, TargetPos={self.target_position}, State={self.state.name}")
         direction = self.target_position - self.position
         distance = direction.length()
+        print(f"DEBUG: Agent._move_towards_target CALCS: DirectionVec={direction}, Distance={distance:.2f}")
 
         if distance < self.target_tolerance:
-            # Reached target
-            self.position = pygame.math.Vector2(self.target_position) # Snap to target, ensure it's a new Vector2 object
+            print(f"DEBUG: Agent._move_towards_target: Reached target. AgentGridPos was {self.position}, TargetPos was {self.target_position}")
+            self.position = pygame.math.Vector2(self.target_position) # Snap
             self.target_position = None
-            # self.state = AgentState.IDLE # State changes handled by caller
-            print(f"Agent reached target at {self.position}") # Debug
             return True
         elif distance > 0:
-            # Move towards target
-            direction.normalize_ip() # Normalize in-place
-            movement = direction * self.speed * dt
-            # Ensure we don't overshoot
-            if movement.length() >= distance: # Use >= to handle exact arrival
-                self.position = pygame.math.Vector2(self.target_position) # Snap to target
+            # Normalize a copy, not in-place, to keep original direction for logging if needed
+            normalized_direction = direction.normalize()
+            movement = normalized_direction * self.speed * dt
+            # print(f"DEBUG: Agent._move_towards_target: Moving. Speed={self.speed}, dt={dt}, MovementVec={movement}") # Potentially noisy
+            if movement.length() >= distance:
+                print(f"DEBUG: Agent._move_towards_target: Reached target (overshoot check). AgentGridPos was {self.position}, TargetPos was {self.target_position}")
+                self.position = pygame.math.Vector2(self.target_position) # Snap
                 self.target_position = None
-                # self.state = AgentState.IDLE # State changes handled by caller
-                print(f"Agent reached target (overshoot check) at {self.position}") # Debug
                 return True
             else:
                 self.position += movement
+                # print(f"DEBUG: Agent._move_towards_target POST-MOVE: New AgentGridPos={self.position}") # Potentially noisy
         return False
 
     def _move_randomly(self, dt: float):
@@ -166,7 +165,7 @@ class Agent:
                 if self.target_resource_node:
                     self.target_position = pygame.math.Vector2(self.target_resource_node.position)
                     self.state = AgentState.MOVING_TO_RESOURCE
-                    print(f"Agent {self.position} IDLE -> MOVING_TO_RESOURCE: {self.target_resource_node.position}")
+                    print(f"DEBUG: Agent.update (IDLE -> MOVING_TO_RESOURCE): AgentGridPos={self.position}, TargetNodePos(resource)={self.target_resource_node.position}, Setting AgentTargetPos to NodePos.")
                 else:
                     # No resources to collect, maybe move randomly or stay idle
                     # For now, let's make it move randomly if no resources are found and it's idle
@@ -202,7 +201,7 @@ class Agent:
                 return
 
             if self._move_towards_target(dt):
-                print(f"Agent {self.position} MOVING_TO_RESOURCE -> GATHERING_RESOURCE at {self.target_resource_node.position}")
+                print(f"DEBUG: Agent.update (MOVING_TO_RESOURCE -> GATHERING_RESOURCE): AgentGridPos={self.position}, Reached TargetNodePos={self.target_resource_node.position if self.target_resource_node else 'None'}")
                 self.state = AgentState.GATHERING_RESOURCE
                 self.gathering_timer = config.DEFAULT_GATHERING_TIME
                 self.target_position = None # Clear movement target
@@ -261,7 +260,7 @@ class Agent:
             if self.target_storage_point:
                 self.target_position = pygame.math.Vector2(self.target_storage_point.position)
                 self.state = AgentState.MOVING_TO_STORAGE
-                print(f"Agent {self.position} CARRYING_RESOURCE -> MOVING_TO_STORAGE: {self.target_storage_point.position}")
+                print(f"DEBUG: Agent.update (CARRYING_RESOURCE -> MOVING_TO_STORAGE): AgentGridPos={self.position}, TargetStoragePos={self.target_storage_point.position}, Setting AgentTargetPos to StoragePos.")
             else:
                 # No suitable storage, what to do? For now, go IDLE.
                 # Could implement a waiting behavior or drop resource later.
@@ -285,7 +284,7 @@ class Agent:
                 return
 
             if self._move_towards_target(dt):
-                print(f"Agent {self.position} MOVING_TO_STORAGE -> DELIVERING_RESOURCE at {self.target_storage_point.position}")
+                print(f"DEBUG: Agent.update (MOVING_TO_STORAGE -> DELIVERING_RESOURCE): AgentGridPos={self.position}, Reached TargetStoragePos={self.target_storage_point.position if self.target_storage_point else 'None'}")
                 self.state = AgentState.DELIVERING_RESOURCE
                 self.delivery_timer = config.DEFAULT_DELIVERY_TIME
                 self.target_position = None # Clear movement target
@@ -361,7 +360,7 @@ class Agent:
                 break
         
         if best_node:
-            print(f"Agent at {self.position} found best resource: {best_node.resource_type.name} at {best_node.position} (dist_sq: {min_dist_sq:.2f})")
+            print(f"DEBUG: Agent._find_best_resource_target: AgentGridPos={self.position} found best resource: {best_node.resource_type.name} at NodePos={best_node.position} (dist_sq: {min_dist_sq:.2f})")
         else:
             print(f"Agent at {self.position} found no suitable resource target.")
         return best_node
@@ -401,7 +400,7 @@ class Agent:
                     best_storage = storage_point
         
         if best_storage:
-            print(f"Agent at {self.position} found best storage at {best_storage.position} for {resource_to_store.name} (dist_sq: {min_dist_sq:.2f})")
+            print(f"DEBUG: Agent._find_best_storage_target: AgentGridPos={self.position} found best storage at StoragePos={best_storage.position} for {resource_to_store.name} (dist_sq: {min_dist_sq:.2f})")
         else:
             print(f"Agent at {self.position} found no suitable storage for {quantity_to_store} of {resource_to_store.name}.")
         return best_storage
