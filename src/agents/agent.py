@@ -147,11 +147,8 @@ class Agent:
         # If we reached the random target, clear it so a new one is picked next time
         if reached_random_target:
             self.target_position = None
-            # Stay in MOVING_RANDOMLY state until explicitly changed by another action
-            # or if the state machine logic for MOVING_RANDOMLY decides to pick a new target immediately.
-            # For now, it will pick a new target in the next call if target_position is None.
-            # self.state = AgentState.MOVING_RANDOMLY # This state is already set, or will be set by update()
-            pass # The state remains MOVING_RANDOMLY
+            print(f"DEBUG: Agent._move_randomly: Reached random target at {self.position}. Transitioning to IDLE.")
+            self.state = AgentState.IDLE # Transition to IDLE to re-evaluate
 
 
     def update(self, dt: float, resource_manager): # Add resource_manager
@@ -342,10 +339,12 @@ class Agent:
                 return None # Or handle differently
 
             for node in candidate_nodes:
+                print(f"DEBUG: Agent._find_best_resource_target: Checking node at {getattr(node, 'position', 'N/A')} for type {res_type.name if hasattr(res_type, 'name') else 'N/A'}. Quantity: {getattr(node, 'current_quantity', 'N/A')}, Node Type: {getattr(node, 'resource_type', 'N/A').name if hasattr(node, 'resource_type') else 'N/A'}")
                 # Ensure node has necessary attributes and resources
-                if (hasattr(node, 'current_quantity') and node.current_quantity > 0 and
-                        hasattr(node, 'resource_type') and node.resource_type == res_type and
-                        hasattr(node, 'position')):
+                # Agent should only target if there's at least 1 collectable unit
+                if (hasattr(node, 'current_quantity') and int(node.current_quantity) >= 1 and
+                    hasattr(node, 'resource_type') and node.resource_type == res_type and
+                    hasattr(node, 'position')):
                     
                     # Using Euclidean distance squared for now.
                     # Replace with pathfinding if available:
