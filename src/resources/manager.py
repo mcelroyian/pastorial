@@ -71,7 +71,8 @@ class ResourceManager:
         """
         for node in self.nodes:
             node.draw(surface, font, grid) # Pass grid to node's draw method
-        # Optionally, draw storage points too
-        # for sp in self.storage_points:
-        #     if hasattr(sp, 'draw'): # Check if storage_point has a draw method
-        #         sp.draw(surface, font, grid) # Assuming storage_point.draw also needs font and grid
+        
+        # Draw storage points
+        for sp in self.storage_points:
+            if hasattr(sp, 'draw'): # Check if storage_point has a draw method
+                sp.draw(surface, grid) # StoragePoint.draw takes surface and grid

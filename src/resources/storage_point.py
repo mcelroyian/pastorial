@@ -72,5 +72,5 @@ class StoragePoint:
         screen_pos = grid.grid_to_screen(self.position)
         color = (128, 128, 128) # Grey for storage
         radius = grid.cell_width // 2
-        pygame.draw.rect(screen, color, (screen_pos.x - radius, screen_pos.y - radius, grid.cell_width, grid.cell_height))
+        pygame.draw.rect(screen, color, (screen_pos[0] - radius, screen_pos[1] - radius, grid.cell_width, grid.cell_height))
         # Optionally, draw stored resource counts or indicators

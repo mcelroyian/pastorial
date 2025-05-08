@@ -9,6 +9,8 @@ from src.rendering import debug_display as debug_renderer
 from src.resources.manager import ResourceManager
 from src.resources.berry_bush import BerryBush
 from src.agents.manager import AgentManager # Added AgentManager
+from src.resources.storage_point import StoragePoint
+from src.resources.resource_types import ResourceType
 
 class GameLoop:
     """
@@ -44,6 +46,7 @@ class GameLoop:
         # Initialize Resource Manager and spawn initial resources
         self.resource_manager = ResourceManager()
         self._spawn_initial_resources() # Uses screen coords currently
+        self._spawn_initial_storage_points()
 
         # Initialize Agent Manager and spawn initial agents
         self.agent_manager = AgentManager(grid=self.grid)
@@ -86,6 +89,28 @@ class GameLoop:
             bush = BerryBush(grid_position) # Pass grid coordinates
             self.resource_manager.add_node(bush)
             print(f"DEBUG: Spawned BerryBush at screen_pos: {screen_position}, which is grid_pos: {grid_position}. Bush stores: {bush.position}")
+
+    def _spawn_initial_storage_points(self):
+        """Creates and places the initial storage points."""
+        # Calculate middle of the screen in grid coordinates
+        middle_screen_x_pixels = config.SCREEN_WIDTH / 2
+        middle_screen_y_pixels = config.SCREEN_HEIGHT / 2
+        middle_screen_pixel_pos = pygame.math.Vector2(middle_screen_x_pixels, middle_screen_y_pixels)
+        storage_position_grid = self.grid.screen_to_grid(middle_screen_pixel_pos)
+
+        # Define storage point properties
+        capacity = 20  # Confirmed capacity
+        accepted_types = [ResourceType.BERRY]
+
+        # Create and add the storage point
+        berry_storage_point = StoragePoint(
+            position=storage_position_grid,
+            overall_capacity=capacity,
+            accepted_resource_types=accepted_types
+        )
+        # Assumes add_storage_point method exists in ResourceManager as per SLICE_2.2_PLAN.md
+        self.resource_manager.add_storage_point(berry_storage_point)
+        print(f"DEBUG: Spawned StoragePoint at grid_pos: {storage_position_grid} for BERRY with capacity {capacity}")
 
     def update(self, dt):
         """Updates game state, including resource nodes."""
