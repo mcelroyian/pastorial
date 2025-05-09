@@ -8,6 +8,8 @@ from src.rendering.grid import Grid # Changed from grid_renderer function to Gri
 from src.rendering import debug_display as debug_renderer
 from src.resources.manager import ResourceManager
 from src.resources.berry_bush import BerryBush
+from src.resources.wheat_field import WheatField # Added WheatField
+from src.resources.mill import Mill # Added Mill
 from src.agents.manager import AgentManager # Added AgentManager
 from src.resources.storage_point import StoragePoint
 from src.resources.resource_types import ResourceType
@@ -45,7 +47,7 @@ class GameLoop:
 
         # Initialize Resource Manager and spawn initial resources
         self.resource_manager = ResourceManager()
-        self._spawn_initial_resources() # Uses screen coords currently
+        self._spawn_initial_resources() # Will also spawn Mills here
         self._spawn_initial_storage_points()
 
         # Initialize Agent Manager and spawn initial agents
@@ -90,6 +92,30 @@ class GameLoop:
             self.resource_manager.add_node(bush)
             print(f"DEBUG: Spawned BerryBush at screen_pos: {screen_position}, which is grid_pos: {grid_position}. Bush stores: {bush.position}")
 
+        # Spawn WheatFields
+        num_wheat_fields = 5 # Example number
+        print(f"Spawning {num_wheat_fields} wheat fields...")
+        for _ in range(num_wheat_fields):
+            screen_pos_x = random.uniform(spawn_margin, config.SCREEN_WIDTH - spawn_margin)
+            screen_pos_y = random.uniform(spawn_margin, config.SCREEN_HEIGHT - spawn_margin)
+            grid_position = self.grid.screen_to_grid(pygame.Vector2(screen_pos_x, screen_pos_y))
+            
+            wheat_field = WheatField(grid_position)
+            self.resource_manager.add_node(wheat_field)
+            print(f"DEBUG: Spawned WheatField at grid_pos: {grid_position}")
+
+        # Spawn Mills
+        mill_positions_grid = [Vector2(3, 3), Vector2(self.grid.width_in_cells - 4, self.grid.height_in_cells - 4)]
+        print(f"Spawning {len(mill_positions_grid)} mills...")
+        for pos in mill_positions_grid:
+            if self.grid.is_within_bounds(pos):
+                mill = Mill(pos)
+                self.resource_manager.add_processing_station(mill) # Use the correct method
+                print(f"DEBUG: Spawned Mill at grid_pos: {pos}")
+            else:
+                print(f"Warning: Initial mill position {pos} is outside grid bounds. Skipping.")
+
+
     def _spawn_initial_storage_points(self):
         """Creates and places the initial storage points."""
         # Calculate middle of the screen in grid coordinates
@@ -111,6 +137,24 @@ class GameLoop:
         # Assumes add_storage_point method exists in ResourceManager as per SLICE_2.2_PLAN.md
         self.resource_manager.add_storage_point(berry_storage_point)
         print(f"DEBUG: Spawned StoragePoint at grid_pos: {storage_position_grid} for BERRY with capacity {capacity}")
+
+        # Spawn StoragePoint for Flour Powder
+        flour_storage_position_grid = Vector2(self.grid.width_in_cells / 2 + 5, self.grid.height_in_cells / 2) # Example position
+        if not self.grid.is_within_bounds(flour_storage_position_grid): # Ensure it's on grid
+            flour_storage_position_grid = Vector2(max(0, min(flour_storage_position_grid.x, self.grid.width_in_cells -1)),
+                                                  max(0, min(flour_storage_position_grid.y, self.grid.height_in_cells -1)))
+
+
+        flour_storage_capacity = 30
+        flour_accepted_types = [ResourceType.FLOUR_POWDER]
+        flour_storage_point = StoragePoint(
+            position=flour_storage_position_grid,
+            overall_capacity=flour_storage_capacity,
+            accepted_resource_types=flour_accepted_types
+        )
+        self.resource_manager.add_storage_point(flour_storage_point)
+        print(f"DEBUG: Spawned StoragePoint at grid_pos: {flour_storage_position_grid} for FLOUR_POWDER with capacity {flour_storage_capacity}")
+
 
     def update(self, dt):
         """Updates game state, including resource nodes."""

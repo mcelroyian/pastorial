@@ -38,7 +38,7 @@ class ResourceNode(ABC):
             self.current_quantity = min(self.current_quantity, float(self.capacity))
 
     @abstractmethod
-    def draw(self, surface: pygame.Surface, font: pygame.font.Font):
+    def draw(self, surface: pygame.Surface, font: pygame.font.Font, grid): # Added grid
         """
         Draws the resource node on the given surface.
         This method must be implemented by subclasses.
@@ -46,6 +46,7 @@ class ResourceNode(ABC):
         Args:
             surface: The pygame surface to draw on.
             font: The pygame font to use for rendering text.
+            grid: The game grid object, potentially for coordinate transformations or cell information.
         """
         pass
 

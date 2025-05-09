@@ -9,6 +9,7 @@ from ..resources.resource_types import ResourceType
 # Assuming ResourceNode is defined in node.py, will be used as type hint
 from ..resources.node import ResourceNode # Assuming ResourceNode has position, resource_type, current_quantity and collect_resource method
 from ..resources.storage_point import StoragePoint # Make sure this is not commented out
+from ..resources.processing import ProcessingStation # For interacting with mills, bakeries, etc.
 from ..core import config # For default times and capacities
 
 
@@ -22,6 +23,9 @@ class AgentState(Enum):
     CARRYING_RESOURCE = auto() # Agent has a resource, deciding/moving to storage
     MOVING_TO_STORAGE = auto()
     DELIVERING_RESOURCE = auto()
+    MOVING_TO_PROCESSOR = auto()       # Moving to a processing station (e.g., Mill)
+    DELIVERING_TO_PROCESSOR = auto() # Delivering input to a processing station
+    COLLECTING_FROM_PROCESSOR = auto() # Collecting output from a processing station
 
 class Agent:
     """Represents an autonomous agent in the simulation."""
@@ -59,6 +63,9 @@ class Agent:
             AgentState.CARRYING_RESOURCE: (200, 0, 200),  # Magenta
             AgentState.MOVING_TO_STORAGE: (0, 200, 200),  # Cyan
             AgentState.DELIVERING_RESOURCE: (100, 100, 255),  # Purple-Blue
+            AgentState.MOVING_TO_PROCESSOR: (255, 140, 0), # DarkOrange
+            AgentState.DELIVERING_TO_PROCESSOR: (138, 43, 226), # BlueViolet
+            AgentState.COLLECTING_FROM_PROCESSOR: (0, 128, 128), # Teal
         }
         self.target_tolerance = 0.1  # Tolerance for reaching target
 
@@ -75,6 +82,7 @@ class Agent:
         # Target entities for resource operations
         self.target_resource_node: Optional[ResourceNode] = None
         self.target_storage_point: Optional[StoragePoint] = None # Ensure this is using the class, not string
+        self.target_processing_station: Optional[ProcessingStation] = None # For mills, bakeries, etc.
 
     def set_target(self, target_position: pygame.math.Vector2):
         """Sets the agent's target position and changes state."""
@@ -156,170 +164,213 @@ class Agent:
         # print(f"Agent at {self.position} in state {self.state.name} with inventory {self.current_inventory}") # Debug
 
         if self.state == AgentState.IDLE:
-            # Try to find a resource to collect
-            if self.current_inventory['quantity'] == 0: # Only look for resources if empty
+            # Decision making:
+            # 1. If carrying resources, decide where to take them.
+            # 2. If inventory empty, decide what to collect (raw resource or processed good).
+            if self.current_inventory['quantity'] > 0:
+                self.state = AgentState.CARRYING_RESOURCE # Will decide target in CARRYING_RESOURCE
+                print(f"Agent {self.position} IDLE (has inventory) -> CARRYING_RESOURCE")
+            else: # Inventory is empty
+                # Try to find a raw resource to collect first, based on priorities
                 self.target_resource_node = self._find_best_resource_target(resource_manager)
                 if self.target_resource_node:
                     self.target_position = pygame.math.Vector2(self.target_resource_node.position)
                     self.state = AgentState.MOVING_TO_RESOURCE
-                    print(f"DEBUG: Agent.update (IDLE -> MOVING_TO_RESOURCE): AgentGridPos={self.position}, TargetNodePos(resource)={self.target_resource_node.position}, Setting AgentTargetPos to NodePos.")
+                    print(f"DEBUG: Agent.update (IDLE -> MOVING_TO_RESOURCE): AgentGridPos={self.position}, TargetNodePos(resource)={self.target_resource_node.position}")
                 else:
-                    # No resources to collect, maybe move randomly or stay idle
-                    # For now, let's make it move randomly if no resources are found and it's idle
-                    self.state = AgentState.MOVING_RANDOMLY # Fallback to random movement
-                    print(f"Agent {self.position} IDLE -> MOVING_RANDOMLY (no resources found)")
-            else: # Has inventory, should try to store it
-                self.state = AgentState.CARRYING_RESOURCE # Transition to find storage
-                print(f"Agent {self.position} IDLE (has inventory) -> CARRYING_RESOURCE")
+                    # No raw resources found or desired. Check if we should collect processed goods.
+                    # For Slice 3.1, this means checking for FLOUR_POWDER from a Mill.
+                    # This logic can be expanded for other processed goods later.
+                    # Let's assume for now if WHEAT is a priority, FLOUR_POWDER might also be implicitly.
+                    # A more explicit task system would be better in the long run.
+                    self.target_processing_station = self._find_best_station_with_output(resource_manager, ResourceType.FLOUR_POWDER)
+                    if self.target_processing_station:
+                        self.target_position = pygame.math.Vector2(self.target_processing_station.position)
+                        self.state = AgentState.MOVING_TO_PROCESSOR # Moving to collect output
+                        print(f"DEBUG: Agent.update (IDLE -> MOVING_TO_PROCESSOR to collect FLOUR_POWDER): AgentGridPos={self.position}, TargetStationPos={self.target_processing_station.position}")
+                    else:
+                        # No raw resources, no flour to collect, move randomly.
+                        self.state = AgentState.MOVING_RANDOMLY
+                        print(f"Agent {self.position} IDLE -> MOVING_RANDOMLY (no resources or flour to collect)")
 
-
-        elif self.state == AgentState.MOVING_TO_TARGET: # Generic movement, should be less used now
+        elif self.state == AgentState.MOVING_TO_TARGET: # Generic movement
             if self._move_towards_target(dt):
-                self.state = AgentState.IDLE # Reached generic target
+                self.state = AgentState.IDLE
 
         elif self.state == AgentState.MOVING_RANDOMLY:
-            self._move_randomly(dt)
-            # _move_randomly keeps it in MOVING_RANDOMLY or sets to IDLE if stuck.
-            # If it becomes IDLE, next tick it will try to find resources.
+            self._move_randomly(dt) # Handles its own transition to IDLE
 
         elif self.state == AgentState.MOVING_TO_RESOURCE:
             if not self.target_resource_node or not self.target_position:
-                print(f"Agent {self.position} MOVING_TO_RESOURCE -> IDLE (target node/pos became None)")
-                self.state = AgentState.IDLE
-                self.target_resource_node = None # Clear target
-                return
-
-            # Check if target resource is still valid (e.g., not depleted by another agent)
-            if self.target_resource_node.current_quantity <= 0:
-                print(f"Agent {self.position} MOVING_TO_RESOURCE -> IDLE (target node {self.target_resource_node.position} depleted)")
-                self.state = AgentState.IDLE
-                self.target_resource_node = None
-                self.target_position = None
-                return
-
+                self.state = AgentState.IDLE; self.target_resource_node = None; return
+            if self.target_resource_node.current_quantity <= 0: # Target depleted
+                self.state = AgentState.IDLE; self.target_resource_node = None; self.target_position = None; return
             if self._move_towards_target(dt):
-                print(f"DEBUG: Agent.update (MOVING_TO_RESOURCE -> GATHERING_RESOURCE): AgentGridPos={self.position}, Reached TargetNodePos={self.target_resource_node.position if self.target_resource_node else 'None'}")
                 self.state = AgentState.GATHERING_RESOURCE
                 self.gathering_timer = config.DEFAULT_GATHERING_TIME
-                self.target_position = None # Clear movement target
+                self.target_position = None
 
         elif self.state == AgentState.GATHERING_RESOURCE:
             if not self.target_resource_node:
-                print(f"Agent {self.position} GATHERING_RESOURCE -> IDLE (target node became None)")
-                self.state = AgentState.IDLE
-                return
-
-            if self.target_resource_node.current_quantity <= 0:
-                print(f"Agent {self.position} GATHERING_RESOURCE -> CARRYING_RESOURCE (node {self.target_resource_node.position} depleted during gathering)")
-                self.state = AgentState.CARRYING_RESOURCE # Move on, even if got nothing this time
-                self.target_resource_node = None
-                self.gathering_timer = 0
-                return
-
+                self.state = AgentState.IDLE; return
+            if self.target_resource_node.current_quantity <= 0: # Depleted during gathering
+                self.state = AgentState.CARRYING_RESOURCE; self.target_resource_node = None; self.gathering_timer = 0; return
+            
             self.gathering_timer -= dt
             if self.gathering_timer <= 0:
                 amount_to_gather = self.inventory_capacity - self.current_inventory['quantity']
                 if amount_to_gather > 0:
-                    # Ensure resource_type is known for the node
                     node_resource_type = getattr(self.target_resource_node, 'resource_type', None)
-                    if node_resource_type is None:
-                        print(f"Error: Target resource node {self.target_resource_node.position} has no resource_type attribute.")
-                        self.state = AgentState.IDLE
-                        self.target_resource_node = None
-                        return
-
-                    # If inventory is empty or matches node type
-                    if self.current_inventory['resource_type'] is None or self.current_inventory['resource_type'] == node_resource_type:
+                    if node_resource_type and (self.current_inventory['resource_type'] is None or self.current_inventory['resource_type'] == node_resource_type):
                         gathered_amount = self.target_resource_node.collect_resource(amount_to_gather)
                         if gathered_amount > 0:
                             self.current_inventory['resource_type'] = node_resource_type
                             self.current_inventory['quantity'] += gathered_amount
-                            print(f"Agent {self.position} gathered {gathered_amount} of {node_resource_type.name} from {self.target_resource_node.position}. Inv: {self.current_inventory['quantity']}")
-                        else:
-                            print(f"Agent {self.position} tried to gather from {self.target_resource_node.position} but got 0.")
-                    else:
-                        # Inventory has a different resource type, cannot gather this one.
-                        # This case should ideally be prevented by CARRYING_RESOURCE logic or by emptying inventory first.
-                        print(f"Agent {self.position} GATHERING_RESOURCE: Inventory type mismatch. Inv: {self.current_inventory['resource_type']}, Node: {node_resource_type}")
-
-                print(f"Agent {self.position} GATHERING_RESOURCE -> CARRYING_RESOURCE (timer ended)")
+                            print(f"Agent {self.position} gathered {gathered_amount} of {node_resource_type.name}")
                 self.state = AgentState.CARRYING_RESOURCE
-                self.target_resource_node = None # Done with this node
+                self.target_resource_node = None
 
         elif self.state == AgentState.CARRYING_RESOURCE:
+            # This state now decides where to go with the carried resource.
             if self.current_inventory['quantity'] == 0:
-                print(f"Agent {self.position} CARRYING_RESOURCE -> IDLE (inventory empty)")
-                self.current_inventory['resource_type'] = None # Ensure type is cleared
-                self.state = AgentState.IDLE
-                return
+                self.state = AgentState.IDLE; self.current_inventory['resource_type'] = None; return
 
-            self.target_storage_point = self._find_best_storage_target(resource_manager)
-            if self.target_storage_point:
-                self.target_position = pygame.math.Vector2(self.target_storage_point.position)
-                self.state = AgentState.MOVING_TO_STORAGE
-                print(f"DEBUG: Agent.update (CARRYING_RESOURCE -> MOVING_TO_STORAGE): AgentGridPos={self.position}, TargetStoragePos={self.target_storage_point.position}, Setting AgentTargetPos to StoragePos.")
-            else:
-                # No suitable storage, what to do? For now, go IDLE.
-                # Could implement a waiting behavior or drop resource later.
-                print(f"Agent {self.position} CARRYING_RESOURCE -> IDLE (no storage found for {self.current_inventory['quantity']} of {self.current_inventory['resource_type'].name if self.current_inventory['resource_type'] else 'None'})")
-                self.state = AgentState.IDLE # Or MOVING_RANDOMLY to not get stuck
+            carried_type = self.current_inventory['resource_type']
+            if carried_type == ResourceType.WHEAT:
+                # Try to find a Mill (ProcessingStation that accepts WHEAT)
+                self.target_processing_station = self._find_best_processing_station_for_input(resource_manager, ResourceType.WHEAT)
+                if self.target_processing_station:
+                    self.target_position = pygame.math.Vector2(self.target_processing_station.position)
+                    self.state = AgentState.MOVING_TO_PROCESSOR # Moving to deliver input
+                    print(f"DEBUG: Agent.update (CARRYING WHEAT -> MOVING_TO_PROCESSOR): TargetStationPos={self.target_processing_station.position}")
+                else:
+                    # No mill found for wheat, maybe store it if general storage accepts wheat? Or move randomly.
+                    # For now, let's try finding a generic storage point if no processor.
+                    self.target_storage_point = self._find_best_storage_target(resource_manager)
+                    if self.target_storage_point:
+                        self.target_position = pygame.math.Vector2(self.target_storage_point.position)
+                        self.state = AgentState.MOVING_TO_STORAGE
+                        print(f"DEBUG: Agent.update (CARRYING WHEAT, no mill -> MOVING_TO_STORAGE): TargetStoragePos={self.target_storage_point.position}")
+                    else:
+                        self.state = AgentState.MOVING_RANDOMLY
+                        print(f"Agent {self.position} CARRYING WHEAT -> MOVING_RANDOMLY (no mill or storage)")
+            elif carried_type == ResourceType.FLOUR_POWDER or carried_type == ResourceType.BERRY: # Other storable goods
+                self.target_storage_point = self._find_best_storage_target(resource_manager)
+                if self.target_storage_point:
+                    self.target_position = pygame.math.Vector2(self.target_storage_point.position)
+                    self.state = AgentState.MOVING_TO_STORAGE
+                    print(f"DEBUG: Agent.update (CARRYING {carried_type.name} -> MOVING_TO_STORAGE): TargetStoragePos={self.target_storage_point.position}")
+                else:
+                    self.state = AgentState.MOVING_RANDOMLY
+                    print(f"Agent {self.position} CARRYING {carried_type.name} -> MOVING_RANDOMLY (no storage)")
+            else: # Unknown carried resource type
+                self.state = AgentState.MOVING_RANDOMLY
+                print(f"Agent {self.position} CARRYING UNKNOWN -> MOVING_RANDOMLY")
+
 
         elif self.state == AgentState.MOVING_TO_STORAGE:
             if not self.target_storage_point or not self.target_position:
-                print(f"Agent {self.position} MOVING_TO_STORAGE -> CARRYING_RESOURCE (target storage/pos became None)")
-                self.state = AgentState.CARRYING_RESOURCE # Re-evaluate storage
-                self.target_storage_point = None
-                return
-
-            # Check if target storage is still valid (e.g., not filled by another agent)
-            # This check might be complex if we need to predict space; StoragePoint.can_accept is key
+                self.state = AgentState.CARRYING_RESOURCE; self.target_storage_point = None; return
+            # Check if target storage is still valid
             if not self.target_storage_point.can_accept(self.current_inventory['resource_type'], self.current_inventory['quantity']):
-                print(f"Agent {self.position} MOVING_TO_STORAGE -> CARRYING_RESOURCE (target storage {self.target_storage_point.position} can no longer accept)")
-                self.state = AgentState.CARRYING_RESOURCE
-                self.target_storage_point = None
-                self.target_position = None
-                return
-
+                self.state = AgentState.CARRYING_RESOURCE; self.target_storage_point = None; self.target_position = None; return
             if self._move_towards_target(dt):
-                print(f"DEBUG: Agent.update (MOVING_TO_STORAGE -> DELIVERING_RESOURCE): AgentGridPos={self.position}, Reached TargetStoragePos={self.target_storage_point.position if self.target_storage_point else 'None'}")
                 self.state = AgentState.DELIVERING_RESOURCE
                 self.delivery_timer = config.DEFAULT_DELIVERY_TIME
-                self.target_position = None # Clear movement target
+                self.target_position = None
 
-        elif self.state == AgentState.DELIVERING_RESOURCE:
+        elif self.state == AgentState.DELIVERING_RESOURCE: # Delivering to a StoragePoint
             if not self.target_storage_point:
-                print(f"Agent {self.position} DELIVERING_RESOURCE -> CARRYING_RESOURCE (target storage became None)")
-                self.state = AgentState.CARRYING_RESOURCE
-                return
-
+                self.state = AgentState.CARRYING_RESOURCE; return
             self.delivery_timer -= dt
             if self.delivery_timer <= 0:
-                resource_type_to_deliver = self.current_inventory['resource_type']
-                quantity_to_deliver = self.current_inventory['quantity']
-
-                if resource_type_to_deliver and quantity_to_deliver > 0:
-                    delivered_amount = self.target_storage_point.add_resource(
-                        resource_type_to_deliver,
-                        quantity_to_deliver
-                    )
-                    if delivered_amount > 0:
-                        self.current_inventory['quantity'] -= delivered_amount
-                        print(f"Agent {self.position} delivered {delivered_amount} of {resource_type_to_deliver.name} to {self.target_storage_point.position}. Inv left: {self.current_inventory['quantity']}")
-                    else:
-                        # Delivery failed, storage might be full or not accepting this type anymore
-                        print(f"Agent {self.position} failed to deliver {quantity_to_deliver} of {resource_type_to_deliver.name} to {self.target_storage_point.position}.")
-                
-                self.target_storage_point = None # Done with this storage point for now
-
+                res_type = self.current_inventory['resource_type']
+                qty = self.current_inventory['quantity']
+                if res_type and qty > 0:
+                    delivered = self.target_storage_point.add_resource(res_type, qty)
+                    if delivered > 0: self.current_inventory['quantity'] -= delivered
+                self.target_storage_point = None
                 if self.current_inventory['quantity'] <= 0:
-                    self.current_inventory['resource_type'] = None
-                    self.current_inventory['quantity'] = 0
-                    print(f"Agent {self.position} DELIVERING_RESOURCE -> IDLE (inventory empty)")
-                    self.state = AgentState.IDLE
+                    self.state = AgentState.IDLE; self.current_inventory['resource_type'] = None; self.current_inventory['quantity'] = 0
                 else:
-                    # Still has items (e.g. partial delivery or different items if multi-carry was allowed)
-                    print(f"Agent {self.position} DELIVERING_RESOURCE -> CARRYING_RESOURCE (still has {self.current_inventory['quantity']} items)")
-                    self.state = AgentState.CARRYING_RESOURCE
+                    self.state = AgentState.CARRYING_RESOURCE # Still has items
+
+        # New states for processing stations
+        elif self.state == AgentState.MOVING_TO_PROCESSOR:
+            if not self.target_processing_station or not self.target_position:
+                self.state = AgentState.IDLE; self.target_processing_station = None; return
+
+            # If moving to deliver WHEAT, check if station can still accept it
+            if self.current_inventory['resource_type'] == ResourceType.WHEAT and \
+               not self.target_processing_station.can_accept_input(ResourceType.WHEAT, self.current_inventory['quantity']):
+                print(f"Agent {self.position} MOVING_TO_PROCESSOR (deliver) -> IDLE (target {self.target_processing_station.position} cannot accept WHEAT)")
+                self.state = AgentState.IDLE; self.target_processing_station = None; self.target_position = None; return
+
+            # If moving to collect FLOUR_POWDER, check if station still has it
+            if self.current_inventory['quantity'] == 0 and \
+               self.target_processing_station.produced_output_type == ResourceType.FLOUR_POWDER and \
+               not self.target_processing_station.has_output():
+                print(f"Agent {self.position} MOVING_TO_PROCESSOR (collect) -> IDLE (target {self.target_processing_station.position} has no FLOUR_POWDER)")
+                self.state = AgentState.IDLE; self.target_processing_station = None; self.target_position = None; return
+
+            if self._move_towards_target(dt):
+                if self.current_inventory['resource_type'] == ResourceType.WHEAT: # Was going to deliver
+                    self.state = AgentState.DELIVERING_TO_PROCESSOR
+                    self.delivery_timer = config.DEFAULT_DELIVERY_TIME # Use same timer as generic delivery
+                elif self.current_inventory['quantity'] == 0: # Was going to collect
+                    self.state = AgentState.COLLECTING_FROM_PROCESSOR
+                    self.gathering_timer = config.DEFAULT_GATHERING_TIME # Use same timer
+                else: # Should not happen if logic is correct
+                    self.state = AgentState.IDLE
+                self.target_position = None
+
+        elif self.state == AgentState.DELIVERING_TO_PROCESSOR:
+            if not self.target_processing_station:
+                self.state = AgentState.CARRYING_RESOURCE; return # Re-evaluate if target lost
+            
+            self.delivery_timer -= dt
+            if self.delivery_timer <= 0:
+                res_type = self.current_inventory['resource_type']
+                qty = self.current_inventory['quantity']
+                if res_type == ResourceType.WHEAT and qty > 0:
+                    # Attempt to deliver all wheat in inventory
+                    if self.target_processing_station.receive(res_type, qty):
+                        print(f"Agent {self.position} delivered {qty} of {res_type.name} to {self.target_processing_station.position}.")
+                        self.current_inventory['quantity'] = 0 # Successfully delivered all
+                    else:
+                        # Failed to deliver, station might be full or not accepting.
+                        # Agent keeps the wheat. CARRYING_RESOURCE will try to find another station or storage.
+                        print(f"Agent {self.position} FAILED to deliver {qty} of {res_type.name} to {self.target_processing_station.position}.")
+                
+                self.target_processing_station = None # Done with this station for this delivery attempt
+                if self.current_inventory['quantity'] <= 0:
+                    self.state = AgentState.IDLE; self.current_inventory['resource_type'] = None
+                else:
+                    self.state = AgentState.CARRYING_RESOURCE # Still has wheat, try again
+
+        elif self.state == AgentState.COLLECTING_FROM_PROCESSOR:
+            if not self.target_processing_station:
+                self.state = AgentState.IDLE; return
+
+            if not self.target_processing_station.has_output() or \
+               self.target_processing_station.produced_output_type != ResourceType.FLOUR_POWDER:
+                # Output gone or wrong type
+                self.state = AgentState.IDLE; self.target_processing_station = None; return
+
+            self.gathering_timer -= dt
+            if self.gathering_timer <= 0:
+                amount_to_collect = self.inventory_capacity - self.current_inventory['quantity']
+                if amount_to_collect > 0:
+                    # Assuming current inventory is empty or matches FLOUR_POWDER
+                    if self.current_inventory['resource_type'] is None or self.current_inventory['resource_type'] == ResourceType.FLOUR_POWDER:
+                        collected_amount = self.target_processing_station.dispense(amount_to_collect)
+                        if collected_amount > 0:
+                            self.current_inventory['resource_type'] = ResourceType.FLOUR_POWDER
+                            self.current_inventory['quantity'] += collected_amount
+                            print(f"Agent {self.position} collected {collected_amount} of FLOUR_POWDER from {self.target_processing_station.position}.")
+                
+                self.state = AgentState.CARRYING_RESOURCE # Now carrying flour (or tried to)
+                self.target_processing_station = None
 
     def _find_best_resource_target(self, resource_manager) -> Optional[ResourceNode]:
         """
@@ -403,6 +454,61 @@ class Agent:
         else:
             print(f"Agent at {self.position} found no suitable storage for {quantity_to_store} of {resource_to_store.name}.")
         return best_storage
+
+    def _find_best_processing_station_for_input(self, resource_manager, input_resource_type: ResourceType) -> Optional[ProcessingStation]:
+        """
+        Finds the best (nearest) processing station that accepts the given input resource type.
+        """
+        try:
+            # ResourceManager's method already finds the nearest one that can accept.
+            station = resource_manager.get_nearest_station_accepting(self.position, input_resource_type)
+            if station:
+                print(f"DEBUG: Agent._find_best_processing_station_for_input: AgentGridPos={self.position} found station {station.__class__.__name__} at {station.position} for {input_resource_type.name}")
+                return station
+            else:
+                print(f"Agent at {self.position} found no station accepting {input_resource_type.name}.")
+                return None
+        except AttributeError:
+            print(f"Warning: resource_manager missing 'get_nearest_station_accepting'. Agent: {self.position}")
+            return None
+        except Exception as e:
+            print(f"Error in _find_best_processing_station_for_input: {e}")
+            return None
+
+    def _find_best_station_with_output(self, resource_manager, output_resource_type: ResourceType) -> Optional[ProcessingStation]:
+        """
+        Finds the best (nearest) processing station that has the specified output resource type available.
+        """
+        best_station: Optional[ProcessingStation] = None
+        min_dist_sq = math.inf
+
+        try:
+            candidate_stations = resource_manager.get_stations_with_output(output_resource_type)
+        except AttributeError:
+            print(f"Warning: resource_manager missing 'get_stations_with_output'. Agent: {self.position}")
+            return None
+        except Exception as e:
+            print(f"Error in _find_best_station_with_output (get_stations_with_output): {e}")
+            return None
+
+        if not candidate_stations:
+            print(f"Agent at {self.position} found no stations with output {output_resource_type.name}.")
+            return None
+
+        for station in candidate_stations:
+            if hasattr(station, 'position'):
+                dist_sq = (station.position - self.position).length_squared()
+                if dist_sq < min_dist_sq:
+                    min_dist_sq = dist_sq
+                    best_station = station
+        
+        if best_station:
+            print(f"DEBUG: Agent._find_best_station_with_output: AgentGridPos={self.position} found best station {best_station.__class__.__name__} at {best_station.position} with output {output_resource_type.name} (dist_sq: {min_dist_sq:.2f})")
+        else:
+            # This case should ideally not be reached if candidate_stations was not empty,
+            # unless all candidates lacked a position attribute (which would be an issue).
+            print(f"Agent at {self.position} found no suitable station with output {output_resource_type.name} after filtering.")
+        return best_station
 
     def draw(self, screen: pygame.Surface, grid): # grid parameter is already here
         """Draws the agent on the screen."""

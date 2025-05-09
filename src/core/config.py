@@ -40,6 +40,7 @@ DEFAULT_DELIVERY_TIME = 1.0  # Seconds to deliver a resource
 RESOURCE_VISUAL_COLORS = {
     ResourceType.BERRY: (220, 20, 60),   # Crimson for BERRY
     ResourceType.WHEAT: (218, 165, 32),  # Goldenrod for WHEAT
+    ResourceType.FLOUR_POWDER: (211, 211, 211), # LightGrey for FLOUR_POWDER
     # Add other resource type colors here as they are defined
     # Example: ResourceType.WATER: (0, 191, 255) # Deep Sky Blue
 }
