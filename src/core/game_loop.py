@@ -11,6 +11,7 @@ from src.resources.berry_bush import BerryBush
 from src.resources.wheat_field import WheatField # Added WheatField
 from src.resources.mill import Mill # Added Mill
 from src.agents.manager import AgentManager # Added AgentManager
+from src.tasks.task_manager import TaskManager # Added TaskManager
 from src.resources.storage_point import StoragePoint
 from src.resources.resource_types import ResourceType
 
@@ -50,27 +51,36 @@ class GameLoop:
         self._spawn_initial_resources() # Will also spawn Mills here
         self._spawn_initial_storage_points()
 
-        # Initialize Agent Manager and spawn initial agents
-        self.agent_manager = AgentManager(grid=self.grid)
+        # Initialize Task Manager
+        # AgentManager needs a TaskManager, and TaskManager needs an AgentManager.
+        # Initialize TaskManager first, potentially with a placeholder for agent_manager_ref if needed,
+        # or ensure TaskManager can function/be updated before agent_manager_ref is fully set.
+        # Based on current TaskManager constructor, it needs resource_manager and agent_manager.
+        # Let's initialize AgentManager first, then TaskManager, then link them.
+
+        # Initialize Agent Manager (will need TaskManager soon)
+        # For now, AgentManager's __init__ takes task_manager. So TaskManager must be first.
+        self.task_manager = TaskManager(resource_manager=self.resource_manager, agent_manager=None) # type: ignore
+        
+        # Initialize Agent Manager and pass the TaskManager
+        self.agent_manager = AgentManager(grid=self.grid, task_manager=self.task_manager)
+        
+        # Now, set the agent_manager_ref in TaskManager
+        self.task_manager.agent_manager_ref = self.agent_manager
+
         self._spawn_initial_agents() # Uses grid coords
 
     def _spawn_initial_agents(self):
         """Creates and places the initial agents."""
         # Example: Spawn agents at specific grid coordinates
         # Ensure these coordinates are valid for the grid size
-        initial_positions = [Vector2(5, 5), Vector2(10, 15)]
-        agent_speed = config.AGENT_SPEED # Assuming this exists in config
-
-        print(f"Spawning {len(initial_positions)} agents...") # DEBUG
-        for pos in initial_positions:
-            if self.grid.is_within_bounds(pos):
-                agent = self.agent_manager.create_agent(position=pos, speed=agent_speed)
-                # Optionally set initial state or target
-                # agent.state = AgentState.MOVING_RANDOMLY
-                print(f"  Spawned Agent at grid position {pos}") # DEBUG
-            else:
-                print(f"Warning: Initial agent position {pos} is outside grid bounds ({self.grid.width_in_cells}x{self.grid.height_in_cells}). Skipping.")
-
+        for _ in range(config.INITIAL_AGENTS):
+            screen_pos_x = random.uniform(config.SCREEN_SPAWN_MARGIN, config.SCREEN_WIDTH - config.SCREEN_SPAWN_MARGIN)
+            screen_pos_y = random.uniform(config.SCREEN_SPAWN_MARGIN, config.SCREEN_HEIGHT - config.SCREEN_SPAWN_MARGIN)
+            screen_position = pygame.Vector2(screen_pos_x, screen_pos_y)
+            grid_position = self.grid.screen_to_grid(screen_position) # Convert to grid coordinates
+            agent = self.agent_manager.create_agent(position=grid_position, speed=config.AGENT_SPEED) # Pass grid position
+            print(f"  Spawned Agent at grid position {grid_position}") # DEBUG
 
     def handle_input(self):
         """Handles user input using the input handler module."""
@@ -80,7 +90,7 @@ class GameLoop:
     def _spawn_initial_resources(self):
         """Creates and places the initial resource nodes."""
         print(f"Spawning {config.INITIAL_BERRY_BUSHES} berry bushes...") # DEBUG
-        spawn_margin = 50 # Avoid spawning too close to screen edges
+        spawn_margin = config.SCREEN_SPAWN_MARGIN # Avoid spawning too close to screen edges
         for _ in range(config.INITIAL_BERRY_BUSHES):
             # Ensure bushes are placed within screen bounds, respecting margin
             screen_pos_x = random.uniform(spawn_margin, config.SCREEN_WIDTH - spawn_margin)
@@ -93,7 +103,7 @@ class GameLoop:
             print(f"DEBUG: Spawned BerryBush at screen_pos: {screen_position}, which is grid_pos: {grid_position}. Bush stores: {bush.position}")
 
         # Spawn WheatFields
-        num_wheat_fields = 5 # Example number
+        num_wheat_fields = config.INITIAL_WHEAT_FIELD # Example number
         print(f"Spawning {num_wheat_fields} wheat fields...")
         for _ in range(num_wheat_fields):
             screen_pos_x = random.uniform(spawn_margin, config.SCREEN_WIDTH - spawn_margin)
@@ -161,7 +171,10 @@ class GameLoop:
         # Update resource nodes
         self.resource_manager.update_nodes(dt)
 
-        # Update agents
+        # Update Task Manager (e.g., for task generation, timeouts)
+        self.task_manager.update(dt)
+
+        # Update agents (agents will interact with TaskManager)
         self.agent_manager.update_agents(dt, self.resource_manager)
 
         # Placeholder for other game entity updates

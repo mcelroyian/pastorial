@@ -7,7 +7,6 @@ class WheatField(ResourceNode):
     """
     A resource node that generates Wheat.
     """
-    GENERATION_TICKS_PER_UNIT = 5 # How many simulation ticks to generate 1 unit of wheat
 
     def __init__(self, position: pygame.Vector2):
         """
@@ -16,18 +15,11 @@ class WheatField(ResourceNode):
         Args:
             position: The position of the field on the grid (pygame.Vector2).
         """
-        # Calculate generation_rate in resources per second
-        # ResourceNode expects generation_rate in units per second.
-        # The game simulation runs at config.TARGET_FPS ticks per second.
-        # We want 1 unit per GENERATION_TICKS_PER_UNIT simulation ticks.
-        # So, rate = (1 unit / GENERATION_TICKS_PER_UNIT ticks) * (config.TARGET_FPS ticks / 1 second)
-        # rate = config.TARGET_FPS / GENERATION_TICKS_PER_UNIT units/second
-        generation_rate_per_second = config.TARGET_FPS / self.GENERATION_TICKS_PER_UNIT
 
         super().__init__(
             position=position,
-            capacity=50, # As per SLICE_3.1_PLAN.md
-            generation_rate=generation_rate_per_second,
+            capacity=config.WHEAT_FIELD_CAPACITY, 
+            generation_interval=config.WHEAT_GENERATION_INTERVAL,
             resource_type=ResourceType.WHEAT
         )
         self.color = config.RESOURCE_VISUAL_COLORS.get(self.resource_type, (255, 255, 0)) # Default yellow if not in config

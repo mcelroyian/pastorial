@@ -18,7 +18,7 @@ class BerryBush(ResourceNode):
         super().__init__(
             position=grid_position, # Store grid_position
             capacity=config.BERRY_BUSH_CAPACITY,
-            generation_rate=config.BERRY_BUSH_GENERATION_RATE,
+            generation_interval=config.BERRY_BUSH_GENERATION_INTERVAL,
             resource_type=ResourceType.BERRY
         )
         # Size of the bush representation (visual size on screen)

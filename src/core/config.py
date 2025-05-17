@@ -5,6 +5,7 @@ from ..resources.resource_types import ResourceType # Import for RESOURCE_VISUAL
 # Screen dimensions
 SCREEN_WIDTH = 1280
 SCREEN_HEIGHT = 720
+SCREEN_SPAWN_MARGIN = 50  # Margin around the screen for spawning
 
 # Frame rate and timing
 TARGET_FPS = 60
@@ -20,15 +21,20 @@ DEBUG_TEXT_COLOR = COLOR_WHITE
 
 # Resource Node Settings
 BERRY_BUSH_COLOR = (0, 128, 0)  # Green
-BERRY_BUSH_CAPACITY = 10
-BERRY_BUSH_GENERATION_RATE = 0.15 # Resources per second
-INITIAL_BERRY_BUSHES = 10
+BERRY_BUSH_CAPACITY = 23
+BERRY_BUSH_GENERATION_INTERVAL = 6 # Resources per second
+INITIAL_BERRY_BUSHES = 15
+INITIAL_WHEAT_FIELD = 15
+
+WHEAT_GENERATION_INTERVAL = 12 # How many simulation ticks to generate 1 unit of wheat
+WHEAT_FIELD_CAPACITY = 11 # Max wheat in a field
 
 # Resource Display Settings
 RESOURCE_TEXT_COLOR = COLOR_WHITE
 RESOURCE_FONT_SIZE = 16
 # NODE_SIZE = GRID_CELL_SIZE # Optional: Use if node size differs from grid cell
 # Agent Settings
+INITIAL_AGENTS = 10
 AGENT_SPEED = 5.0 # Grid units per second
 DEFAULT_AGENT_INVENTORY_CAPACITY = 5 # Max items an agent can carry
 
