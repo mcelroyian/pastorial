@@ -27,6 +27,7 @@ class AgentState(Enum):
     MOVING_TO_PROCESSOR = auto()
     DELIVERING_TO_PROCESSOR = auto()
     COLLECTING_FROM_PROCESSOR = auto()
+    EVALUATING_TASKS = auto() # New state for job board interaction
 
 class Agent:
     """Represents an autonomous agent in the simulation, executing tasks."""
@@ -72,8 +73,12 @@ class Agent:
             AgentState.MOVING_TO_PROCESSOR: (255, 140, 0),
             AgentState.DELIVERING_TO_PROCESSOR: (138, 43, 226),
             AgentState.COLLECTING_FROM_PROCESSOR: (0, 128, 128),
+            AgentState.EVALUATING_TASKS: (200, 200, 200), # Light grey for evaluating
         }
         self.target_tolerance = 0.1
+        self.task_evaluation_cooldown = 1.0 # Seconds before trying to evaluate tasks again if none found
+        self._last_task_evaluation_time = 0.0
+
 
         self.inventory_capacity: int = inventory_capacity
         self.current_inventory: Dict[str, Optional[ResourceType] | int] = {
@@ -134,52 +139,128 @@ class Agent:
                 self.state = AgentState.IDLE 
                 return
 
-        if self._move_towards_target(dt): 
+        if self._move_towards_target(dt):
             self.state = AgentState.IDLE
+
+    def _evaluate_and_select_task(self, available_tasks: List['Task'], resource_manager: 'ResourceManager') -> Optional['Task']:
+        """
+        Evaluates available tasks and selects one based on agent's logic.
+        Placeholder: For now, tries to pick the first task matching its resource priorities,
+                     or any task if no priorities are set or no match found.
+        """
+        if not available_tasks:
+            return None
+
+        if self.resource_priorities:
+            for task in available_tasks:
+                # This is a simplistic check. Real evaluation would be more complex.
+                # Example: Check if a GatherAndDeliverTask matches resource_priorities
+                from ..tasks.task import GatherAndDeliverTask # Local import
+                if isinstance(task, GatherAndDeliverTask):
+                    if task.resource_type_to_gather in self.resource_priorities:
+                        # TODO: Add more checks like proximity, agent capacity vs task quantity etc.
+                        print(f"DEBUG: Agent {self.id} evaluating task {task.task_id} ({task.task_type.name}). Matched priority: {task.resource_type_to_gather.name}. Selecting.")
+                        return task
+                    else:
+                        print(f"DEBUG: Agent {self.id} evaluating task {task.task_id} ({task.task_type.name}). No match for resource_priorities {self.resource_priorities}.")
+
+        # If no priority match or no priorities set, try to pick the first available task
+        # TODO: Add more sophisticated fallback logic (e.g. highest priority task overall)
+        if available_tasks:
+            print(f"DEBUG: Agent {self.id} selected task {available_tasks[0].task_id} ({available_tasks[0].task_type.name}) (first available as fallback).")
+            return available_tasks[0]
+        
+        print(f"DEBUG: Agent {self.id} found no suitable task after evaluating {len(available_tasks)} tasks.")
+        return None
+
 
     def update(self, dt: float, resource_manager: 'ResourceManager'):
         """Updates the agent's state and behavior based on its current task or idleness."""
-        from ..tasks.task_types import TaskStatus 
+        from ..tasks.task_types import TaskStatus
+        current_time = pygame.time.get_ticks() / 1000.0 # Get time in seconds
 
         if self.current_task:
             new_task_status = self.current_task.execute_step(self, dt, resource_manager)
             
             if new_task_status in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED]:
+                # Task's cleanup should handle releasing resources/reservations
                 self.current_task.cleanup(self, resource_manager, success=(new_task_status == TaskStatus.COMPLETED))
+                # TaskManager handles archiving/re-posting
                 self.task_manager_ref.report_task_outcome(self.current_task, new_task_status, self)
                 
                 self.current_task = None
-                self.state = AgentState.IDLE 
-                self.target_position = None   
+                self.state = AgentState.IDLE # Become idle to look for new tasks
+                self.target_position = None
 
                 if new_task_status == TaskStatus.COMPLETED and self.current_inventory['quantity'] == 0:
                     self.current_inventory['resource_type'] = None
         
-        elif self.state == AgentState.IDLE: 
-            assigned_task = self.task_manager_ref.request_task_for_agent(self)
-            if assigned_task:
-                self.current_task = assigned_task
-                if self.current_task: # mypy check
-                    self.current_task.agent_id = self.id 
-                
-                    if self.current_task.prepare(self, resource_manager):
-                        pass 
-                    else:
-                        self.current_task.cleanup(self, resource_manager, success=False) 
-                        self.task_manager_ref.report_task_outcome(self.current_task, TaskStatus.FAILED, self)
-                        self.current_task = None
-                        self.state = AgentState.IDLE 
-            else:
-                self.state = AgentState.MOVING_RANDOMLY 
-        
-        if self.current_task is None: 
-            if self.state == AgentState.MOVING_RANDOMLY:
-                self._move_randomly(dt)
-            elif self.state != AgentState.IDLE: 
-                self.state = AgentState.IDLE
-                self.target_position = None
+        # Agent is not busy with a task
+        else:
+            if self.state == AgentState.IDLE:
+                # Transition to evaluating tasks
+                print(f"DEBUG: Agent {self.id}: State IDLE, transitioning to EVALUATING_TASKS.")
+                self.state = AgentState.EVALUATING_TASKS
+                self._last_task_evaluation_time = current_time # Reset cooldown timer
+            
+            elif self.state == AgentState.EVALUATING_TASKS:
+                if current_time - self._last_task_evaluation_time >= self.task_evaluation_cooldown:
+                    print(f"DEBUG: Agent {self.id}: State EVALUATING_TASKS. Cooldown passed. Fetching tasks.")
+                    self._last_task_evaluation_time = current_time
+                    available_tasks = self.task_manager_ref.get_available_tasks()
+                    print(f"DEBUG: Agent {self.id}: Found {len(available_tasks)} tasks on job board.")
+                    
+                    if available_tasks:
+                        chosen_task_obj = self._evaluate_and_select_task(available_tasks, resource_manager)
+                        
+                        if chosen_task_obj:
+                            print(f"DEBUG: Agent {self.id}: Evaluated and chose task {chosen_task_obj.task_id}. Attempting to claim.")
+                            claimed_task = self.task_manager_ref.attempt_claim_task(chosen_task_obj.task_id, self)
+                            if claimed_task:
+                                print(f"DEBUG: Agent {self.id}: Successfully CLAIMED task {claimed_task.task_id}. Preparing task.")
+                                self.current_task = claimed_task
+                                # Agent's state will be set by task.prepare()
+                                if not self.current_task.prepare(self, resource_manager):
+                                    # Preparation failed, task will be reported as FAILED by prepare's cleanup
+                                    # Agent becomes IDLE again to re-evaluate
+                                    print(f"DEBUG: Agent {self.id}: Task {self.current_task.task_id} PREPARATION FAILED. Reporting outcome and returning to IDLE.")
+                                    # TaskManager's report_task_outcome will handle re-posting if applicable
+                                    self.task_manager_ref.report_task_outcome(self.current_task, TaskStatus.FAILED, self)
+                                    # Ensure task cleanup is called if prepare fails and doesn't reach agent's main loop for cleanup
+                                    if hasattr(self.current_task, 'cleanup') and callable(getattr(self.current_task, 'cleanup')):
+                                         self.current_task.cleanup(self, resource_manager, success=False)
+                                    self.current_task = None
+                                    self.state = AgentState.IDLE
+                                else:
+                                    print(f"DEBUG: Agent {self.id}: Task {claimed_task.task_id} PREPARATION SUCCESSFUL. Agent state: {self.state}")
 
-    def draw(self, screen: pygame.Surface, grid): 
+                            else:
+                                # Failed to claim (e.g., another agent took it)
+                                print(f"DEBUG: Agent {self.id}: Failed to claim task {chosen_task_obj.task_id}. Re-evaluating (will become IDLE).")
+                                self.state = AgentState.IDLE # Re-evaluate on next suitable tick
+                        else:
+                            # No suitable task found by evaluation logic
+                            print(f"DEBUG: Agent {self.id}: No suitable tasks found after evaluation. Moving randomly.")
+                            self.state = AgentState.MOVING_RANDOMLY
+                    else:
+                        # No tasks on the job board
+                        print(f"DEBUG: Agent {self.id}: No tasks available on job board. Moving randomly.")
+                        self.state = AgentState.MOVING_RANDOMLY
+                # else:
+                    # print(f"DEBUG: Agent {self.id}: State EVALUATING_TASKS. Cooldown NOT passed. Waiting. Current: {current_time:.2f}, LastEval: {self._last_task_evaluation_time:.2f}, Cooldown: {self.task_evaluation_cooldown:.2f}")
+
+            
+            elif self.state == AgentState.MOVING_RANDOMLY:
+                self._move_randomly(dt)
+                # If _move_randomly sets state to IDLE, it will then transition to EVALUATING_TASKS
+            
+            # Ensure agent doesn't get stuck in a non-IDLE, non-MOVING_RANDOMLY state without a task
+            elif self.state not in [AgentState.IDLE, AgentState.EVALUATING_TASKS, AgentState.MOVING_RANDOMLY]:
+                 self.state = AgentState.IDLE
+                 self.target_position = None
+
+
+    def draw(self, screen: pygame.Surface, grid):
         """Draws the agent on the screen."""
         screen_pos = self.grid.grid_to_screen(self.position) # type: ignore
         agent_radius = self.grid.cell_width // 2 # type: ignore

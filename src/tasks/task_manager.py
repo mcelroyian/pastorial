@@ -33,7 +33,7 @@ class TaskManager:
         # Higher priority number means more important
         self.pending_tasks.append(task)
         self.pending_tasks.sort(key=lambda t: t.priority, reverse=True)
-        print(f"TaskManager: Added new task {task.task_id} ({task.task_type.name}) with priority {task.priority}. Pending: {len(self.pending_tasks)}")
+        print(f"DEBUG: TaskManager: Added new task {task.task_id} ({task.task_type.name}) P:{task.priority} to job board. Board size: {len(self.pending_tasks)}")
 
     def create_gather_task(self,
                            resource_type: ResourceType,
@@ -60,24 +60,50 @@ class TaskManager:
         self.add_task(task)
         return task
 
-    def request_task_for_agent(self, agent: 'Agent') -> Optional[Task]:
-        """
-        Assigns the highest priority available task to the given agent if one exists.
-        Called by an agent when it becomes IDLE.
-        """
-        if not self.pending_tasks:
-            return None
+    # def request_task_for_agent(self, agent: 'Agent') -> Optional[Task]:
+    #     """
+    #     DEPRECATED: Agents will now pull tasks from the job board.
+    #     Assigns the highest priority available task to the given agent if one exists.
+    #     Called by an agent when it becomes IDLE.
+    #     """
+    #     if not self.pending_tasks:
+    #         return None
+    #
+    #     # Get the highest priority task
+    #     # TODO: Add more sophisticated matching (e.g., agent skills, proximity, current inventory)
+    #     task_to_assign = self.pending_tasks.pop(0) # Highest priority due to sort
+    #
+    #     task_to_assign.agent_id = agent.id
+    #     task_to_assign.status = TaskStatus.ASSIGNED # Mark as assigned before prepare
+    #     self.assigned_tasks[agent.id] = task_to_assign
+    #
+    #     print(f"TaskManager: Assigning task {task_to_assign.task_id} ({task_to_assign.task_type.name}) to agent {agent.id}. Assigned: {len(self.assigned_tasks)}")
+    #     return task_to_assign
 
-        # Get the highest priority task
-        # TODO: Add more sophisticated matching (e.g., agent skills, proximity, current inventory)
-        task_to_assign = self.pending_tasks.pop(0) # Highest priority due to sort
+    def get_available_tasks(self) -> List[Task]:
+        """Returns the current list of tasks on the job board (pending_tasks)."""
+        return self.pending_tasks
+
+    def attempt_claim_task(self, task_id: uuid.UUID, agent: 'Agent') -> Optional[Task]:
+        """
+        Allows an agent to attempt to claim a task from the job board.
+        Returns the task if successfully claimed, None otherwise.
+        """
+        task_to_claim = None
+        for i, task in enumerate(self.pending_tasks):
+            if task.task_id == task_id:
+                task_to_claim = self.pending_tasks.pop(i)
+                break
         
-        task_to_assign.agent_id = agent.id
-        task_to_assign.status = TaskStatus.ASSIGNED # Mark as assigned before prepare
-        self.assigned_tasks[agent.id] = task_to_assign
-        
-        print(f"TaskManager: Assigning task {task_to_assign.task_id} ({task_to_assign.task_type.name}) to agent {agent.id}. Assigned: {len(self.assigned_tasks)}")
-        return task_to_assign
+        if task_to_claim:
+            task_to_claim.agent_id = agent.id
+            task_to_claim.status = TaskStatus.ASSIGNED # Or PREPARING if prepare is called immediately
+            self.assigned_tasks[agent.id] = task_to_claim
+            print(f"TaskManager: Task {task_to_claim.task_id} ({task_to_claim.task_type.name}) CLAIMED by agent {agent.id}. Pending: {len(self.pending_tasks)}, Assigned: {len(self.assigned_tasks)}")
+            return task_to_claim
+        else:
+            print(f"TaskManager: Agent {agent.id} FAILED to claim task {task_id}. Task not found or already claimed.")
+            return None
 
     def report_task_outcome(self, task: Task, final_status: TaskStatus, agent: 'Agent'):
         """
@@ -95,14 +121,23 @@ class TaskManager:
             self.completed_tasks.append(task)
             print(f"TaskManager: Task {task.task_id} COMPLETED by agent {agent.id}. Completed: {len(self.completed_tasks)}")
         elif final_status == TaskStatus.FAILED:
-            self.failed_tasks.append(task)
-            print(f"TaskManager: Task {task.task_id} FAILED for agent {agent.id}. Reason: {task.error_message}. Failed: {len(self.failed_tasks)}")
-            # TODO: Potential re-queueing or modification logic for failed tasks
+            self.failed_tasks.append(task) # Keep a record of failed tasks
+            print(f"TaskManager: Task {task.task_id} FAILED for agent {agent.id}. Reason: {task.error_message}. Failed list size: {len(self.failed_tasks)}")
+            
+            # Re-post task to job board (simple re-posting for now)
+            # TODO: Add more sophisticated logic for re-posting (e.g., delay, modification, max retries)
+            print(f"DEBUG: TaskManager: Re-posting task {task.task_id} ({task.task_type.name}) to job board due to FAILED status.")
+            task.status = TaskStatus.PENDING # Reset status
+            task.agent_id = None # Unassign agent
+            # task.error_message = None # Optionally clear error message or append to a list of errors
+            self.add_task(task) # add_task handles sorting by priority
+
         elif final_status == TaskStatus.CANCELLED:
             # If cancelled, it might just be removed or put in a separate list
-            print(f"TaskManager: Task {task.task_id} CANCELLED for agent {agent.id}. Failed: {len(self.failed_tasks)}")
             # For now, treat like failed for tracking, or add a cancelled_tasks list.
-            self.failed_tasks.append(task) 
+            # Depending on policy, cancelled tasks might also be re-posted or archived.
+            self.failed_tasks.append(task) # Or a self.cancelled_tasks list
+            print(f"TaskManager: Task {task.task_id} CANCELLED for agent {agent.id}. Added to failed/cancelled list.")
 
 
     def update(self, dt: float):
@@ -114,8 +149,12 @@ class TaskManager:
         """
         current_time = time.time()
         if current_time >= self._next_task_check_time:
+            print(f"DEBUG: TaskManager: Update - time to check for task generation. Current time: {current_time:.2f}, Next check: {self._next_task_check_time:.2f}")
             self._generate_tasks_if_needed()
             self._next_task_check_time = current_time + self._task_generation_interval
+        # else:
+            # print(f"DEBUG: TaskManager: Update - NOT time to check for task generation. Current time: {current_time:.2f}, Next check: {self._next_task_check_time:.2f}")
+
 
         # TODO: Check for tasks that are assigned but stuck (e.g., agent died, task timed out)
         # This would involve iterating self.assigned_tasks and checking task.last_update_time
@@ -144,14 +183,14 @@ class TaskManager:
             # print(f"DEBUG TaskManager: Active berry gather tasks: {active_berry_gather_tasks}, Max Allowed: {config.MAX_ACTIVE_BERRY_GATHER_TASKS}") # Debug
 
             if active_berry_gather_tasks < config.MAX_ACTIVE_BERRY_GATHER_TASKS:
-                print(f"TaskManager: Low Berry Stock ({current_berry_stock} < {config.MIN_BERRY_STOCK_LEVEL}). Generating new GatherAndDeliverTask for BERRY.")
+                print(f"DEBUG: TaskManager: Low Berry Stock ({current_berry_stock} < {config.MIN_BERRY_STOCK_LEVEL}). Generating new GatherAndDeliverTask for BERRY.")
                 self.create_gather_task(
                     resource_type=ResourceType.BERRY,
                     quantity=config.BERRY_GATHER_TASK_QUANTITY,
                     priority=config.BERRY_GATHER_TASK_PRIORITY
                 )
-            # else:
-                # print(f"DEBUG TaskManager: Berry stock low, but max active berry tasks ({config.MAX_ACTIVE_BERRY_GATHER_TASKS}) reached.") # Debug
+            else:
+                print(f"DEBUG: TaskManager: Berry stock low ({current_berry_stock}), but max active berry tasks ({active_berry_gather_tasks}/{config.MAX_ACTIVE_BERRY_GATHER_TASKS}) reached. No new BERRY task.")
         # else:
             # print(f"DEBUG TaskManager: Berry stock ({current_berry_stock}) is sufficient. No new berry task needed.") # Debug
 
@@ -173,14 +212,14 @@ class TaskManager:
             # print(f"DEBUG TaskManager: Active wheat gather tasks: {active_wheat_gather_tasks}, Max Allowed: {config.MAX_ACTIVE_WHEAT_GATHER_TASKS}") # Debug
 
             if active_wheat_gather_tasks < config.MAX_ACTIVE_WHEAT_GATHER_TASKS:
-                print(f"TaskManager: Low Wheat Stock ({current_wheat_stock} < {config.MIN_WHEAT_STOCK_LEVEL}). Generating new GatherAndDeliverTask for WHEAT.")
+                print(f"DEBUG: TaskManager: Low Wheat Stock ({current_wheat_stock} < {config.MIN_WHEAT_STOCK_LEVEL}). Generating new GatherAndDeliverTask for WHEAT.")
                 self.create_gather_task(
                     resource_type=ResourceType.WHEAT,
                     quantity=config.WHEAT_GATHER_TASK_QUANTITY,
                     priority=config.WHEAT_GATHER_TASK_PRIORITY
                 )
-            # else:
-                # print(f"DEBUG TaskManager: Wheat stock low, but max active wheat tasks ({config.MAX_ACTIVE_WHEAT_GATHER_TASKS}) reached.") # Debug
+            else:
+                print(f"DEBUG: TaskManager: Wheat stock low ({current_wheat_stock}), but max active wheat tasks ({active_wheat_gather_tasks}/{config.MAX_ACTIVE_WHEAT_GATHER_TASKS}) reached. No new WHEAT task.")
         # else:
             # print(f"DEBUG TaskManager: Wheat stock ({current_wheat_stock}) is sufficient. No new wheat task needed.") # Debug
         # TODO: Future: Add logic for other resource types here, following a similar pattern.
