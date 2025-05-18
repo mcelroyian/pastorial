@@ -147,3 +147,35 @@ class ResourceManager:
             # The 'stored_resources' attribute in StoragePoint is a Dict[ResourceType, int]
             total_quantity += sp.stored_resources.get(resource_type, 0)
         return total_quantity
+
+    def has_available_sources(self, resource_type: ResourceType, min_quantity: int = 1) -> bool:
+        """
+        Checks if there are any available (unclaimed and with sufficient quantity)
+        resource nodes for a given resource type.
+        """
+        for node in self.nodes:
+            if node.resource_type == resource_type and \
+               node.current_quantity >= min_quantity and \
+               node.claimed_by_task_id is None:
+                return True
+        return False
+
+    def has_available_dropoffs(self, resource_type: ResourceType, min_capacity: int = 1) -> bool:
+        """
+        Checks if there are any storage points that accept the given resource type
+        and have available capacity for reservation/dropoff.
+        """
+        # Import StoragePoint here if not already available due to TYPE_CHECKING
+        # from .storage_point import StoragePoint # Not strictly needed if using 'StoragePoint' string hint
+
+        for sp in self.storage_points:
+            # Ensure sp is an instance of StoragePoint if type hints are loose
+            # For now, we assume self.storage_points only contains StoragePoint instances
+            if sp.can_accept(resource_type, quantity=min_capacity, for_reservation=True): # Checks accepted types and available capacity
+                return True
+        
+        # Future: Could extend to check ProcessingStation input buffers if tasks involve delivering to them
+        # for station in self.processing_stations:
+        #     if station.accepted_input_type == resource_type and station.can_accept_input(resource_type, min_capacity):
+        #         return True
+        return False

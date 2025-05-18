@@ -144,34 +144,69 @@ class Agent:
 
     def _evaluate_and_select_task(self, available_tasks: List['Task'], resource_manager: 'ResourceManager') -> Optional['Task']:
         """
-        Evaluates available tasks and selects one based on agent's logic.
-        Placeholder: For now, tries to pick the first task matching its resource priorities,
-                     or any task if no priorities are set or no match found.
+        Evaluates available tasks and selects one based on agent's logic,
+        checking for resource availability, dropoff space, and inventory compatibility.
         """
-        if not available_tasks:
+        from ..tasks.task import GatherAndDeliverTask # Local import for type checking
+
+        candidate_tasks: List[Task] = []
+
+        for task in available_tasks:
+            if not isinstance(task, GatherAndDeliverTask): # For now, only evaluate GatherAndDeliverTasks
+                print(f"DEBUG: Agent {self.id} skipping non-GatherAndDeliverTask {task.task_id} ({task.task_type.name}).")
+                continue
+
+            task_resource_type = task.resource_type_to_gather
+            print(f"DEBUG: Agent {self.id} evaluating task {task.task_id} ({task.task_type.name}) for resource {task_resource_type.name}.")
+
+            # 1. Check Agent's Resource Priorities
+            if self.resource_priorities and task_resource_type not in self.resource_priorities:
+                print(f"DEBUG: Agent {self.id}: Task {task.task_id} resource {task_resource_type.name} not in priorities {self.resource_priorities}. Skipping.")
+                continue
+            
+            # 2. Check Source Availability (using ResourceManager)
+            if not resource_manager.has_available_sources(task_resource_type, min_quantity=1):
+                print(f"DEBUG: Agent {self.id}: Task {task.task_id} - No available sources for {task_resource_type.name}. Skipping.")
+                continue
+            
+            # 3. Check Dropoff Availability (using ResourceManager)
+            # Consider quantity agent might carry - for now, just check if *any* space.
+            # A more advanced check would be: min_capacity = min(self.inventory_capacity, task.quantity_to_gather)
+            if not resource_manager.has_available_dropoffs(task_resource_type, min_capacity=1):
+                print(f"DEBUG: Agent {self.id}: Task {task.task_id} - No available dropoffs for {task_resource_type.name}. Skipping.")
+                continue
+
+            # 4. Check Agent Inventory Compatibility & Capacity
+            current_inv_qty = self.current_inventory.get('quantity', 0)
+            current_inv_type = self.current_inventory.get('resource_type')
+
+            if current_inv_qty > 0 and current_inv_type != task_resource_type:
+                remaining_capacity = self.inventory_capacity - current_inv_qty
+                # Define a 'meaningful amount' - e.g., at least 1 unit or a percentage of capacity
+                # For simplicity, let's say if it's carrying something else, it needs full capacity for the new task type
+                # or at least capacity for 1 unit of the new type.
+                # This logic can be refined. For now, if carrying something else, and not enough space for at least 1 new unit, skip.
+                if remaining_capacity < 1 : # Needs to be able to carry at least 1 of the new type
+                    print(f"DEBUG: Agent {self.id}: Task {task.task_id} - Inventory has {current_inv_qty} of {current_inv_type}, not enough space for {task_resource_type.name}. Skipping.")
+                    continue
+            
+            if current_inv_qty == self.inventory_capacity and current_inv_type != task_resource_type:
+                print(f"DEBUG: Agent {self.id}: Task {task.task_id} - Inventory full with {current_inv_type}, cannot take task for {task_resource_type.name}. Skipping.")
+                continue
+            
+            print(f"DEBUG: Agent {self.id}: Task {task.task_id} ({task_resource_type.name}) PASSED all preliminary checks.")
+            candidate_tasks.append(task)
+
+        if not candidate_tasks:
+            print(f"DEBUG: Agent {self.id} found NO suitable tasks after full evaluation of {len(available_tasks)} initial tasks.")
             return None
 
-        if self.resource_priorities:
-            for task in available_tasks:
-                # This is a simplistic check. Real evaluation would be more complex.
-                # Example: Check if a GatherAndDeliverTask matches resource_priorities
-                from ..tasks.task import GatherAndDeliverTask # Local import
-                if isinstance(task, GatherAndDeliverTask):
-                    if task.resource_type_to_gather in self.resource_priorities:
-                        # TODO: Add more checks like proximity, agent capacity vs task quantity etc.
-                        print(f"DEBUG: Agent {self.id} evaluating task {task.task_id} ({task.task_type.name}). Matched priority: {task.resource_type_to_gather.name}. Selecting.")
-                        return task
-                    else:
-                        print(f"DEBUG: Agent {self.id} evaluating task {task.task_id} ({task.task_type.name}). No match for resource_priorities {self.resource_priorities}.")
-
-        # If no priority match or no priorities set, try to pick the first available task
-        # TODO: Add more sophisticated fallback logic (e.g. highest priority task overall)
-        if available_tasks:
-            print(f"DEBUG: Agent {self.id} selected task {available_tasks[0].task_id} ({available_tasks[0].task_type.name}) (first available as fallback).")
-            return available_tasks[0]
-        
-        print(f"DEBUG: Agent {self.id} found no suitable task after evaluating {len(available_tasks)} tasks.")
-        return None
+        # If multiple candidates, sort by task.priority (higher is better)
+        # Then could add proximity or other heuristics. For now, highest priority.
+        candidate_tasks.sort(key=lambda t: t.priority, reverse=True)
+        selected_task = candidate_tasks[0]
+        print(f"DEBUG: Agent {self.id} selected task {selected_task.task_id} ({selected_task.task_type.name}) P:{selected_task.priority} from {len(candidate_tasks)} candidates.")
+        return selected_task
 
 
     def update(self, dt: float, resource_manager: 'ResourceManager'):
