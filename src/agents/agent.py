@@ -7,6 +7,8 @@ import math # For math.inf
 
 from ..resources.resource_types import ResourceType
 from ..core import config # Agent still uses config for timers, capacity if not overridden by task
+from ..tasks.task import GatherAndDeliverTask
+from ..tasks.task_types import TaskStatus
 
 # Forward references for type hinting
 if TYPE_CHECKING:
@@ -98,9 +100,63 @@ class Agent:
         # The agent's state (e.g., MOVING_TO_RESOURCE) should be set by the task itself.
         # print(f"DEBUG: Agent {self.id} set_target: NewTargetGridPos={self.target_position}")
 
-    def _move_towards_target(self, dt: float) -> bool:
+    def set_objective_idle(self):
+        """Sets the agent's state to IDLE and clears its target."""
+        self.state = AgentState.IDLE
+        self.target_position = None
+
+    def set_objective_evaluating_tasks(self):
+        """Sets the agent's state to EVALUATING_TASKS."""
+        self.state = AgentState.EVALUATING_TASKS
+        self.target_position = None # Typically no movement target when evaluating
+
+    def set_objective_move_randomly(self):
+        """Sets the agent's state to MOVING_RANDOMLY."""
+        self.state = AgentState.MOVING_RANDOMLY
+        self.target_position = None # _move_randomly will pick a specific target
+
+    def set_objective_move_to_resource(self, target_node_position: pygame.math.Vector2):
+        """Sets the agent's state to MOVING_TO_RESOURCE and sets the target."""
+        self.state = AgentState.MOVING_TO_RESOURCE
+        self.target_position = target_node_position
+
+    def set_objective_gather_resource(self, gathering_time: float):
+        """Sets the agent's state to GATHERING_RESOURCE and starts the timer."""
+        self.state = AgentState.GATHERING_RESOURCE
+        self.gathering_timer = gathering_time
+        self.target_position = None # Agent is at the resource
+
+    def set_objective_move_to_storage(self, storage_position: pygame.math.Vector2):
+        """Sets the agent's state to MOVING_TO_STORAGE and sets the target."""
+        self.state = AgentState.MOVING_TO_STORAGE
+        self.target_position = storage_position
+
+    def set_objective_deliver_resource(self, delivery_time: float):
+        """Sets the agent's state to DELIVERING_RESOURCE and starts the timer."""
+        self.state = AgentState.DELIVERING_RESOURCE
+        self.delivery_timer = delivery_time
+        self.target_position = None # Agent is at the storage
+
+    def set_objective_move_to_processor(self, processor_position: pygame.math.Vector2):
+        """Sets the agent's state to MOVING_TO_PROCESSOR and sets the target."""
+        self.state = AgentState.MOVING_TO_PROCESSOR
+        self.target_position = processor_position
+
+    def set_objective_deliver_to_processor(self, delivery_time: float):
+        """Sets the agent's state to DELIVERING_TO_PROCESSOR and starts the timer."""
+        self.state = AgentState.DELIVERING_TO_PROCESSOR
+        self.delivery_timer = delivery_time # Assuming delivery_timer can be reused
+        self.target_position = None
+
+    def set_objective_collect_from_processor(self, collection_time: float):
+        """Sets the agent's state to COLLECTING_FROM_PROCESSOR and starts a timer."""
+        self.state = AgentState.COLLECTING_FROM_PROCESSOR
+        self.gathering_timer = collection_time # Assuming gathering_timer can be reused
+        self.target_position = None
+
+    def move_towards_current_target(self, dt: float) -> bool:
         """
-        Moves the agent towards its target position.
+        Moves the agent towards its current target position.
         Args: dt (float): Delta time.
         Returns: bool: True if the target was reached this frame, False otherwise.
         """
@@ -111,8 +167,8 @@ class Agent:
         distance = direction.length()
 
         if distance < self.target_tolerance:
-            self.position = pygame.math.Vector2(self.target_position) 
-            self.target_position = None 
+            self.position = pygame.math.Vector2(self.target_position)
+            self.target_position = None
             return True
         elif distance > 0:
             normalized_direction = direction.normalize()
@@ -127,27 +183,28 @@ class Agent:
 
     def _move_randomly(self, dt: float):
         """Moves the agent randomly within the grid bounds."""
-        if self.target_position is None: 
+        if self.target_position is None:
             if self.grid.width_in_cells > 0 and self.grid.height_in_cells > 0: # type: ignore
+                # Pick a new random target
                 self.target_position = pygame.math.Vector2(
                     random.uniform(0, self.grid.width_in_cells - 1), # type: ignore
                     random.uniform(0, self.grid.height_in_cells - 1) # type: ignore
                 )
                 self.target_position.x = max(0, min(self.target_position.x, self.grid.width_in_cells - 1)) # type: ignore
                 self.target_position.y = max(0, min(self.target_position.y, self.grid.height_in_cells - 1)) # type: ignore
-            else: 
-                self.state = AgentState.IDLE 
+            else:
+                self.set_objective_idle()
                 return
 
-        if self._move_towards_target(dt):
-            self.state = AgentState.IDLE
+        if self.move_towards_current_target(dt):
+            self.set_objective_idle()
 
     def _evaluate_and_select_task(self, available_tasks: List['Task'], resource_manager: 'ResourceManager') -> Optional['Task']:
         """
         Evaluates available tasks and selects one based on agent's logic,
         checking for resource availability, dropoff space, and inventory compatibility.
         """
-        from ..tasks.task import GatherAndDeliverTask # Local import for type checking
+        # Removed local import: from ..tasks.task import GatherAndDeliverTask
 
         candidate_tasks: List[Task] = []
 
@@ -211,7 +268,7 @@ class Agent:
 
     def update(self, dt: float, resource_manager: 'ResourceManager'):
         """Updates the agent's state and behavior based on its current task or idleness."""
-        from ..tasks.task_types import TaskStatus
+        # Removed local import: from ..tasks.task_types import TaskStatus
         current_time = pygame.time.get_ticks() / 1000.0 # Get time in seconds
 
         if self.current_task:
@@ -224,8 +281,7 @@ class Agent:
                 self.task_manager_ref.report_task_outcome(self.current_task, new_task_status, self)
                 
                 self.current_task = None
-                self.state = AgentState.IDLE # Become idle to look for new tasks
-                self.target_position = None
+                self.set_objective_idle() # Become idle to look for new tasks
 
                 if new_task_status == TaskStatus.COMPLETED and self.current_inventory['quantity'] == 0:
                     self.current_inventory['resource_type'] = None
@@ -235,10 +291,12 @@ class Agent:
             if self.state == AgentState.IDLE:
                 # Transition to evaluating tasks
                 print(f"DEBUG: Agent {self.id}: State IDLE, transitioning to EVALUATING_TASKS.")
-                self.state = AgentState.EVALUATING_TASKS
+                self.set_objective_evaluating_tasks()
                 self._last_task_evaluation_time = current_time # Reset cooldown timer
             
             elif self.state == AgentState.EVALUATING_TASKS:
+                # Agent is evaluating tasks, TaskManager handles this.
+                # Agent's own timers are not relevant here.
                 if current_time - self._last_task_evaluation_time >= self.task_evaluation_cooldown:
                     print(f"DEBUG: Agent {self.id}: State EVALUATING_TASKS. Cooldown passed. Fetching tasks.")
                     self._last_task_evaluation_time = current_time
@@ -265,22 +323,22 @@ class Agent:
                                     if hasattr(self.current_task, 'cleanup') and callable(getattr(self.current_task, 'cleanup')):
                                          self.current_task.cleanup(self, resource_manager, success=False)
                                     self.current_task = None
-                                    self.state = AgentState.IDLE
+                                    self.set_objective_idle()
                                 else:
                                     print(f"DEBUG: Agent {self.id}: Task {claimed_task.task_id} PREPARATION SUCCESSFUL. Agent state: {self.state}")
 
                             else:
                                 # Failed to claim (e.g., another agent took it)
                                 print(f"DEBUG: Agent {self.id}: Failed to claim task {chosen_task_obj.task_id}. Re-evaluating (will become IDLE).")
-                                self.state = AgentState.IDLE # Re-evaluate on next suitable tick
+                                self.set_objective_idle() # Re-evaluate on next suitable tick
                         else:
                             # No suitable task found by evaluation logic
                             print(f"DEBUG: Agent {self.id}: No suitable tasks found after evaluation. Moving randomly.")
-                            self.state = AgentState.MOVING_RANDOMLY
+                            self.set_objective_move_randomly()
                     else:
                         # No tasks on the job board
                         print(f"DEBUG: Agent {self.id}: No tasks available on job board. Moving randomly.")
-                        self.state = AgentState.MOVING_RANDOMLY
+                        self.set_objective_move_randomly()
                 # else:
                     # print(f"DEBUG: Agent {self.id}: State EVALUATING_TASKS. Cooldown NOT passed. Waiting. Current: {current_time:.2f}, LastEval: {self._last_task_evaluation_time:.2f}, Cooldown: {self.task_evaluation_cooldown:.2f}")
 
@@ -291,8 +349,33 @@ class Agent:
             
             # Ensure agent doesn't get stuck in a non-IDLE, non-MOVING_RANDOMLY state without a task
             elif self.state not in [AgentState.IDLE, AgentState.EVALUATING_TASKS, AgentState.MOVING_RANDOMLY]:
-                 self.state = AgentState.IDLE
-                 self.target_position = None
+                  self.set_objective_idle()
+        
+        # Agent-specific state updates based on its current state (timers, etc.)
+        if self.state == AgentState.GATHERING_RESOURCE:
+            if self.gathering_timer > 0:
+                self.gathering_timer -= dt
+                if self.gathering_timer < 0:
+                    self.gathering_timer = 0 # Ensure it doesn't go negative
+
+        elif self.state == AgentState.DELIVERING_RESOURCE:
+            if self.delivery_timer > 0:
+                self.delivery_timer -= dt
+                if self.delivery_timer < 0:
+                    self.delivery_timer = 0 # Ensure it doesn't go negative
+        
+        # Similar timer logic can be added for COLLECTING_FROM_PROCESSOR or DELIVERING_TO_PROCESSOR if those use timers
+        elif self.state == AgentState.COLLECTING_FROM_PROCESSOR: # Assuming it uses gathering_timer
+            if self.gathering_timer > 0:
+                self.gathering_timer -= dt
+                if self.gathering_timer < 0:
+                    self.gathering_timer = 0
+        
+        elif self.state == AgentState.DELIVERING_TO_PROCESSOR: # Assuming it uses delivery_timer
+            if self.delivery_timer > 0:
+                self.delivery_timer -= dt
+                if self.delivery_timer < 0:
+                    self.delivery_timer = 0
 
 
     def draw(self, screen: pygame.Surface, grid):

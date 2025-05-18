@@ -95,10 +95,10 @@ class GatherAndDeliverTask(Task):
         self._current_step_key: str = "find_resource_and_dropoff" # Initial step
 
     def prepare(self, agent: 'Agent', resource_manager: 'ResourceManager') -> bool:
-        from ..agents.agent import AgentState # Import here to use AgentState enum
+        # from ..agents.agent import AgentState # REMOVED
         self._update_timestamp()
         self.status = TaskStatus.PREPARING
-        agent.target_position = None # Clear previous agent target
+        # agent.target_position = None # Agent's objective methods will handle target
 
         # 1. Find and Claim Resource Node
         if not self.target_resource_node_ref:
@@ -156,14 +156,13 @@ class GatherAndDeliverTask(Task):
         # If all preparations are successful:
         self.status = TaskStatus.IN_PROGRESS_MOVE_TO_RESOURCE # First active step
         self._current_step_key = "move_to_resource"
-        agent.state = AgentState.MOVING_TO_RESOURCE # Set agent's state
-        agent.target_position = self.target_resource_node_ref.position
+        agent.set_objective_move_to_resource(self.target_resource_node_ref.position) # MODIFIED
         print(f"Task {self.task_id} PREPARED for agent {agent.id}. Target Node: {self.target_resource_node_ref.position}, Target Dropoff: {self.target_dropoff_ref.position}, Reserved Dropoff Qty: {self.reserved_at_dropoff_quantity}")
         return True
 
     def execute_step(self, agent: 'Agent', dt: float, resource_manager: 'ResourceManager') -> TaskStatus:
         self._update_timestamp()
-        from ..agents.agent import AgentState # Import here to use AgentState enum
+        # from ..agents.agent import AgentState # REMOVED
 
         if not self.target_resource_node_ref or not self.target_dropoff_ref:
             self.error_message = "Target resource or dropoff became invalid during execution."
@@ -172,26 +171,22 @@ class GatherAndDeliverTask(Task):
 
         # --- Step: Move to Resource Node ---
         if self._current_step_key == "move_to_resource":
-            if agent.state != AgentState.MOVING_TO_RESOURCE: # Ensure agent is in correct state
-                 agent.state = AgentState.MOVING_TO_RESOURCE
-                 agent.target_position = self.target_resource_node_ref.position
+            # Task directs the agent to move to the resource.
+            # The agent's set_objective_move_to_resource method handles setting the state and target.
+            # No need to check agent.state here as the task is dictating the current objective.
+            agent.set_objective_move_to_resource(self.target_resource_node_ref.position)
 
-            if agent.target_position is None: # Should have been set in prepare or previous step
-                agent.target_position = self.target_resource_node_ref.position
-
-            if agent._move_towards_target(dt): # Agent reached the resource node
+            if agent.move_towards_current_target(dt): # Agent reached the resource node
                 self._current_step_key = "gather_resource"
                 self.status = TaskStatus.IN_PROGRESS_GATHERING
-                agent.state = AgentState.GATHERING_RESOURCE
-                agent.gathering_timer = agent.config.DEFAULT_GATHERING_TIME # Agent needs config access or pass time
-                agent.target_position = None # Clear movement target
+                agent.set_objective_gather_resource(agent.config.DEFAULT_GATHERING_TIME)
             return self.status
 
         # --- Step: Gather Resource ---
         elif self._current_step_key == "gather_resource":
-            if agent.state != AgentState.GATHERING_RESOURCE:
-                agent.state = AgentState.GATHERING_RESOURCE
-                agent.gathering_timer = agent.config.DEFAULT_GATHERING_TIME
+            # Objective to gather is set when transitioning to this step.
+            # Here, we just check the timer and node status.
+            # agent.set_objective_gather_resource(agent.config.DEFAULT_GATHERING_TIME) # REMOVED: Objective set on transition
 
             # Check if node still has resources / is still claimed by this task
             if self.target_resource_node_ref.current_quantity <= 0 or \
@@ -237,8 +232,7 @@ class GatherAndDeliverTask(Task):
                 # Transition to moving to dropoff
                 self._current_step_key = "move_to_dropoff"
                 self.status = TaskStatus.IN_PROGRESS_MOVE_TO_DROPOFF
-                agent.state = AgentState.MOVING_TO_STORAGE # Or MOVING_TO_PROCESSOR if applicable
-                agent.target_position = self.target_dropoff_ref.position
+                agent.set_objective_move_to_storage(self.target_dropoff_ref.position) # MODIFIED
                 
                 # Release node claim if we are done with it for this task
                 # (e.g. if quantity_to_gather is met or node is empty)
@@ -251,26 +245,20 @@ class GatherAndDeliverTask(Task):
 
         # --- Step: Move to Dropoff ---
         elif self._current_step_key == "move_to_dropoff":
-            if agent.state != AgentState.MOVING_TO_STORAGE: # Assuming StoragePoint for now
-                agent.state = AgentState.MOVING_TO_STORAGE
-                agent.target_position = self.target_dropoff_ref.position
+            # Task directs the agent to move to storage.
+            agent.set_objective_move_to_storage(self.target_dropoff_ref.position)
             
-            if agent.target_position is None:
-                agent.target_position = self.target_dropoff_ref.position
-
-            if agent._move_towards_target(dt):
+            if agent.move_towards_current_target(dt):
                 self._current_step_key = "deliver_resource"
                 self.status = TaskStatus.IN_PROGRESS_DELIVERING
-                agent.state = AgentState.DELIVERING_RESOURCE
-                agent.delivery_timer = agent.config.DEFAULT_DELIVERY_TIME
-                agent.target_position = None
+                agent.set_objective_deliver_resource(agent.config.DEFAULT_DELIVERY_TIME)
             return self.status
 
         # --- Step: Deliver Resource ---
         elif self._current_step_key == "deliver_resource":
-            if agent.state != AgentState.DELIVERING_RESOURCE:
-                agent.state = AgentState.DELIVERING_RESOURCE
-                agent.delivery_timer = agent.config.DEFAULT_DELIVERY_TIME
+            # Objective to deliver is set when transitioning to this step.
+            # Here, we just check the timer.
+            # agent.set_objective_deliver_resource(agent.config.DEFAULT_DELIVERY_TIME) # REMOVED: Objective set on transition
 
             agent.delivery_timer -= dt
             if agent.delivery_timer <= 0:
