@@ -14,6 +14,7 @@ from src.agents.manager import AgentManager # Added AgentManager
 from src.tasks.task_manager import TaskManager # Added TaskManager
 from src.resources.storage_point import StoragePoint
 from src.resources.resource_types import ResourceType
+from src.rendering.task_status_display import TaskStatusDisplay # Added for Task UI
 
 class GameLoop:
     """
@@ -69,6 +70,27 @@ class GameLoop:
         self.task_manager.agent_manager_ref = self.agent_manager
 
         self._spawn_initial_agents() # Uses grid coords
+
+        # Initialize UI Font and Task Display Panel
+        try:
+            self.ui_font = pygame.font.Font(None, 24) # General UI font, size can be from config
+        except Exception as e:
+            print(f"Warning: Could not load default font for UI. Error: {e}")
+            self.ui_font = pygame.font.Font(pygame.font.get_default_font(), 24)
+
+        panel_width = 350  # Width of the task panel
+        panel_height = config.SCREEN_HEIGHT
+        panel_x = config.SCREEN_WIDTH - panel_width
+        panel_y = 0
+        task_panel_rect = pygame.Rect(panel_x, panel_y, panel_width, panel_height)
+        
+        self.task_display = TaskStatusDisplay(
+            task_manager=self.task_manager,
+            font=self.ui_font, # Use a dedicated UI font
+            panel_rect=task_panel_rect,
+            screen_surface=self.screen,
+            config_module=config # Pass the config module
+        )
 
     def _spawn_initial_agents(self):
         """Creates and places the initial agents."""
@@ -195,6 +217,10 @@ class GameLoop:
         # Draw debug info (FPS)
         # Use clock attribute directly for FPS calculation
         debug_renderer.display_fps(self.screen, self.clock)
+
+        # Draw the Task Status Display Panel
+        if hasattr(self, 'task_display'): # Ensure it's initialized
+            self.task_display.draw()
 
         pygame.display.flip() # Update the full display Surface to the screen
 

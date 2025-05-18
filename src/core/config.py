@@ -34,7 +34,7 @@ RESOURCE_TEXT_COLOR = COLOR_WHITE
 RESOURCE_FONT_SIZE = 16
 # NODE_SIZE = GRID_CELL_SIZE # Optional: Use if node size differs from grid cell
 # Agent Settings
-INITIAL_AGENTS = 10
+INITIAL_AGENTS = 6
 AGENT_SPEED = 5.0 # Grid units per second
 DEFAULT_AGENT_INVENTORY_CAPACITY = 5 # Max items an agent can carry
 
