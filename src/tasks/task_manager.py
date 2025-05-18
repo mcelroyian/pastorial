@@ -5,6 +5,7 @@ from typing import List, Dict, Optional, TYPE_CHECKING
 from .task import Task, GatherAndDeliverTask # Assuming task.py is in the same directory
 from .task_types import TaskType, TaskStatus
 from ..resources.resource_types import ResourceType # Assuming this path
+from ..core import config # For task generation settings
 
 # Forward references to avoid circular imports
 if TYPE_CHECKING:
@@ -121,37 +122,72 @@ class TaskManager:
 
     def _generate_tasks_if_needed(self):
         """
-        Example task generation logic.
-        This should be driven by the needs of the simulation (e.g., storage levels).
+        Generates tasks based on simulation state, e.g., low resource stock.
+        Currently implements logic for Berry stock.
         """
-        # Example: If less than 2 pending berry tasks, create one.
-        # This is very basic; a real system would look at resource levels in storage, demand, etc.
+        # --- Berry Task Generation ---
+        current_berry_stock = self.resource_manager_ref.get_global_resource_quantity(ResourceType.BERRY)
         
-        # Count existing pending GATHER_AND_DELIVER tasks for BERRY
-        pending_berry_gather_tasks = sum(
-            1 for task in self.pending_tasks 
-            if isinstance(task, GatherAndDeliverTask) and task.resource_type_to_gather == ResourceType.BERRY
-        )
-        # Also consider assigned tasks that are for berries
-        assigned_berry_gather_tasks = sum(
-            1 for task in self.assigned_tasks.values()
-            if isinstance(task, GatherAndDeliverTask) and task.resource_type_to_gather == ResourceType.BERRY
-        )
+        # print(f"DEBUG TaskManager: Current global berry stock: {current_berry_stock}, Min Level: {config.MIN_BERRY_STOCK_LEVEL}") # Debug
 
-        total_active_berry_tasks = pending_berry_gather_tasks + assigned_berry_gather_tasks
-
-        if total_active_berry_tasks < 5: # Maintain at least 2 active berry tasks (pending or assigned)
-            print("TaskManager: Generating new GatherAndDeliverTask for BERRY due to low active tasks.")
-            self.create_gather_task(
-                resource_type=ResourceType.BERRY,
-                quantity=10, # Gather 10 berries
-                priority=5    # Default priority
+        if current_berry_stock < config.MIN_BERRY_STOCK_LEVEL:
+            # Count existing GATHER_AND_DELIVER tasks for BERRY (pending or assigned)
+            active_berry_gather_tasks = sum(
+                1 for task in self.pending_tasks
+                if isinstance(task, GatherAndDeliverTask) and task.resource_type_to_gather == ResourceType.BERRY
             )
+            active_berry_gather_tasks += sum(
+                1 for task in self.assigned_tasks.values()
+                if isinstance(task, GatherAndDeliverTask) and task.resource_type_to_gather == ResourceType.BERRY
+            )
+
+            # print(f"DEBUG TaskManager: Active berry gather tasks: {active_berry_gather_tasks}, Max Allowed: {config.MAX_ACTIVE_BERRY_GATHER_TASKS}") # Debug
+
+            if active_berry_gather_tasks < config.MAX_ACTIVE_BERRY_GATHER_TASKS:
+                print(f"TaskManager: Low Berry Stock ({current_berry_stock} < {config.MIN_BERRY_STOCK_LEVEL}). Generating new GatherAndDeliverTask for BERRY.")
+                self.create_gather_task(
+                    resource_type=ResourceType.BERRY,
+                    quantity=config.BERRY_GATHER_TASK_QUANTITY,
+                    priority=config.BERRY_GATHER_TASK_PRIORITY
+                )
+            # else:
+                # print(f"DEBUG TaskManager: Berry stock low, but max active berry tasks ({config.MAX_ACTIVE_BERRY_GATHER_TASKS}) reached.") # Debug
+        # else:
+            # print(f"DEBUG TaskManager: Berry stock ({current_berry_stock}) is sufficient. No new berry task needed.") # Debug
+
+# --- Wheat Task Generation ---
+        current_wheat_stock = self.resource_manager_ref.get_global_resource_quantity(ResourceType.WHEAT)
         
+        # print(f"DEBUG TaskManager: Current global wheat stock: {current_wheat_stock}, Min Level: {config.MIN_WHEAT_STOCK_LEVEL}") # Debug
+
+        if current_wheat_stock < config.MIN_WHEAT_STOCK_LEVEL:
+            active_wheat_gather_tasks = sum(
+                1 for task in self.pending_tasks
+                if isinstance(task, GatherAndDeliverTask) and task.resource_type_to_gather == ResourceType.WHEAT
+            )
+            active_wheat_gather_tasks += sum(
+                1 for task in self.assigned_tasks.values()
+                if isinstance(task, GatherAndDeliverTask) and task.resource_type_to_gather == ResourceType.WHEAT
+            )
+
+            # print(f"DEBUG TaskManager: Active wheat gather tasks: {active_wheat_gather_tasks}, Max Allowed: {config.MAX_ACTIVE_WHEAT_GATHER_TASKS}") # Debug
+
+            if active_wheat_gather_tasks < config.MAX_ACTIVE_WHEAT_GATHER_TASKS:
+                print(f"TaskManager: Low Wheat Stock ({current_wheat_stock} < {config.MIN_WHEAT_STOCK_LEVEL}). Generating new GatherAndDeliverTask for WHEAT.")
+                self.create_gather_task(
+                    resource_type=ResourceType.WHEAT,
+                    quantity=config.WHEAT_GATHER_TASK_QUANTITY,
+                    priority=config.WHEAT_GATHER_TASK_PRIORITY
+                )
+            # else:
+                # print(f"DEBUG TaskManager: Wheat stock low, but max active wheat tasks ({config.MAX_ACTIVE_WHEAT_GATHER_TASKS}) reached.") # Debug
+        # else:
+            # print(f"DEBUG TaskManager: Wheat stock ({current_wheat_stock}) is sufficient. No new wheat task needed.") # Debug
+        # TODO: Future: Add logic for other resource types here, following a similar pattern.
         # Example: Check Wheat storage and create tasks if low (conceptual)
-        # flour_storage = self.resource_manager_ref.get_storage_for_resource(ResourceType.FLOUR_POWDER)
-        # if flour_storage and flour_storage.get_current_load_of_type(ResourceType.FLOUR_POWDER) < 20:
-        #     # Create task to make flour, or gather wheat if mills need it
+        # current_wheat_stock = self.resource_manager_ref.get_global_resource_quantity(ResourceType.WHEAT)
+        # if current_wheat_stock < getattr(config, 'MIN_WHEAT_STOCK_LEVEL', 0): # Assuming MIN_WHEAT_STOCK_LEVEL in config
+        #     # ... similar logic to create wheat gathering tasks ...
         #     pass
 
 

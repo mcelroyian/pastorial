@@ -215,3 +215,5 @@ sequenceDiagram
     Task->>StoragePoint: release_reservation(task.id, qty)
     Agent->>TaskManager: report_task_outcome(task, status, self)
     Note over Agent: Agent becomes IDLE
+
+```

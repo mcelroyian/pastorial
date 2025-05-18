@@ -135,8 +135,8 @@ class GameLoop:
         storage_position_grid = self.grid.screen_to_grid(middle_screen_pixel_pos)
 
         # Define storage point properties
-        capacity = 20  # Confirmed capacity
-        accepted_types = [ResourceType.BERRY]
+        capacity = 25  # Updated capacity for shared storage
+        accepted_types = [ResourceType.BERRY, ResourceType.WHEAT]
 
         # Create and add the storage point
         berry_storage_point = StoragePoint(
@@ -146,7 +146,7 @@ class GameLoop:
         )
         # Assumes add_storage_point method exists in ResourceManager as per SLICE_2.2_PLAN.md
         self.resource_manager.add_storage_point(berry_storage_point)
-        print(f"DEBUG: Spawned StoragePoint at grid_pos: {storage_position_grid} for BERRY with capacity {capacity}")
+        print(f"DEBUG: Spawned StoragePoint at grid_pos: {storage_position_grid} for BERRY and WHEAT with capacity {capacity}")
 
         # Spawn StoragePoint for Flour Powder
         flour_storage_position_grid = Vector2(self.grid.width_in_cells / 2 + 5, self.grid.height_in_cells / 2) # Example position

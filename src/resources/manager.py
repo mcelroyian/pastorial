@@ -132,3 +132,18 @@ class ResourceManager:
             s for s in self.processing_stations
             if s.produced_output_type == resource_type and s.has_output()
         ]
+    def get_global_resource_quantity(self, resource_type: ResourceType) -> int:
+        """
+        Calculates the total quantity of a specific resource type across all storage points.
+
+        Args:
+            resource_type: The ResourceType to query.
+
+        Returns:
+            The total integer quantity of the specified resource.
+        """
+        total_quantity = 0
+        for sp in self.storage_points:
+            # The 'stored_resources' attribute in StoragePoint is a Dict[ResourceType, int]
+            total_quantity += sp.stored_resources.get(resource_type, 0)
+        return total_quantity

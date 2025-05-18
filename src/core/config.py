@@ -50,3 +50,13 @@ RESOURCE_VISUAL_COLORS = {
     # Add other resource type colors here as they are defined
     # Example: ResourceType.WATER: (0, 191, 255) # Deep Sky Blue
 }
+# Task Generation Settings
+MIN_BERRY_STOCK_LEVEL = 50
+BERRY_GATHER_TASK_QUANTITY = 20
+BERRY_GATHER_TASK_PRIORITY = 5
+MAX_ACTIVE_BERRY_GATHER_TASKS = 3
+# Wheat Task Generation Settings
+MIN_WHEAT_STOCK_LEVEL = 40
+WHEAT_GATHER_TASK_QUANTITY = 15
+WHEAT_GATHER_TASK_PRIORITY = 4
+MAX_ACTIVE_WHEAT_GATHER_TASKS = 2

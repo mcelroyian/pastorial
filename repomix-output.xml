@@ -391,11 +391,11 @@ DEBUG_TEXT_COLOR = COLOR_WHITE
 # Resource Node Settings
 BERRY_BUSH_COLOR = (0, 128, 0)  # Green
 BERRY_BUSH_CAPACITY = 23
-BERRY_BUSH_GENERATION_RATE = 0.15 # Resources per second
+BERRY_BUSH_GENERATION_INTERVAL = 6 # Resources per second
 INITIAL_BERRY_BUSHES = 15
 INITIAL_WHEAT_FIELD = 15
 
-WHEAT_GENERATION_RATE = 0.15 # How many simulation ticks to generate 1 unit of wheat
+WHEAT_GENERATION_INTERVAL = 12 # How many simulation ticks to generate 1 unit of wheat
 WHEAT_FIELD_CAPACITY = 11 # Max wheat in a field
 
 # Resource Display Settings
@@ -419,6 +419,16 @@ RESOURCE_VISUAL_COLORS = {
     # Add other resource type colors here as they are defined
     # Example: ResourceType.WATER: (0, 191, 255) # Deep Sky Blue
 }
+# Task Generation Settings
+MIN_BERRY_STOCK_LEVEL = 50
+BERRY_GATHER_TASK_QUANTITY = 20
+BERRY_GATHER_TASK_PRIORITY = 5
+MAX_ACTIVE_BERRY_GATHER_TASKS = 3
+# Wheat Task Generation Settings
+MIN_WHEAT_STOCK_LEVEL = 40
+WHEAT_GATHER_TASK_QUANTITY = 15
+WHEAT_GATHER_TASK_PRIORITY = 4
+MAX_ACTIVE_WHEAT_GATHER_TASKS = 2
 </file>
 
 <file path="core/game_loop.py">
@@ -559,8 +569,8 @@ class GameLoop:
         storage_position_grid = self.grid.screen_to_grid(middle_screen_pixel_pos)
 
         # Define storage point properties
-        capacity = 20  # Confirmed capacity
-        accepted_types = [ResourceType.BERRY]
+        capacity = 25  # Updated capacity for shared storage
+        accepted_types = [ResourceType.BERRY, ResourceType.WHEAT]
 
         # Create and add the storage point
         berry_storage_point = StoragePoint(
@@ -570,7 +580,7 @@ class GameLoop:
         )
         # Assumes add_storage_point method exists in ResourceManager as per SLICE_2.2_PLAN.md
         self.resource_manager.add_storage_point(berry_storage_point)
-        print(f"DEBUG: Spawned StoragePoint at grid_pos: {storage_position_grid} for BERRY with capacity {capacity}")
+        print(f"DEBUG: Spawned StoragePoint at grid_pos: {storage_position_grid} for BERRY and WHEAT with capacity {capacity}")
 
         # Spawn StoragePoint for Flour Powder
         flour_storage_position_grid = Vector2(self.grid.width_in_cells / 2 + 5, self.grid.height_in_cells / 2) # Example position
@@ -798,7 +808,7 @@ class BerryBush(ResourceNode):
         super().__init__(
             position=grid_position, # Store grid_position
             capacity=config.BERRY_BUSH_CAPACITY,
-            generation_rate=config.BERRY_BUSH_GENERATION_RATE,
+            generation_interval=config.BERRY_BUSH_GENERATION_INTERVAL,
             resource_type=ResourceType.BERRY
         )
         # Size of the bush representation (visual size on screen)
@@ -976,6 +986,21 @@ class ResourceManager:
             s for s in self.processing_stations
             if s.produced_output_type == resource_type and s.has_output()
         ]
+    def get_global_resource_quantity(self, resource_type: ResourceType) -> int:
+        """
+        Calculates the total quantity of a specific resource type across all storage points.
+
+        Args:
+            resource_type: The ResourceType to query.
+
+        Returns:
+            The total integer quantity of the specified resource.
+        """
+        total_quantity = 0
+        for sp in self.storage_points:
+            # The 'stored_resources' attribute in StoragePoint is a Dict[ResourceType, int]
+            total_quantity += sp.stored_resources.get(resource_type, 0)
+        return total_quantity
 </file>
 
 <file path="resources/mill.py">
@@ -1053,24 +1078,24 @@ class ResourceNode(ABC):
     """
     Base class for resource nodes in the simulation.
     """
-    def __init__(self, position: pygame.Vector2, capacity: int, generation_rate: float, resource_type: ResourceType):
+    def __init__(self, position: pygame.Vector2, capacity: int, generation_interval: float, resource_type: ResourceType):
         """
         Initializes a ResourceNode.
 
         Args:
             position: The position of the node on the grid (pygame.Vector2).
             capacity: The maximum amount of resources the node can hold (integer units).
-            generation_rate: The rate at which resources are generated per second (can be fractional).
+            generation_interval: The interval at which resources are generated (in seconds).
             resource_type: The type of resource this node provides.
         """
         if not isinstance(position, pygame.Vector2):
             raise TypeError("Position must be a pygame.Vector2")
         self.position = position
         self.capacity = int(capacity) # Ensure capacity is integer
-        self.generation_rate = generation_rate
+        self.generation_interval = generation_interval
         self.resource_type = resource_type # Added
-        self.current_quantity = 0.0  # Start with zero resources, will be float due to generation_rate
-                                      # Collection will deal with integer parts.
+        self.current_quantity = 0
+        self._generation_timer = 0.0 
         
         # --- Attributes for task-based claiming ---
         self.claimed_by_task_id: Optional[uuid.UUID] = None
@@ -1084,9 +1109,14 @@ class ResourceNode(ABC):
             dt: The time elapsed since the last update in seconds.
         """
         if self.current_quantity < self.capacity:
-            self.current_quantity += self.generation_rate * dt
-            # Clamp the resources to the capacity
-            self.current_quantity = min(self.current_quantity, float(self.capacity))
+            self._generation_timer += dt
+            resources_to_add = int(self._generation_timer / self.generation_interval)
+            if resources_to_add > 0:
+                self._generation_timer -= resources_to_add * self.generation_interval
+                # Don't overfill
+                resources_needed = self.capacity - self.current_quantity
+                actual_to_add = min(resources_to_add, resources_needed)
+                self.current_quantity += actual_to_add
 
     # --- Methods for task-based claiming ---
     def claim(self, agent_id: uuid.UUID, task_id: uuid.UUID) -> bool:
@@ -1138,13 +1168,11 @@ class ResourceNode(ABC):
         Returns:
             The actual integer amount of resources collected (can be less than requested).
         """
-        # Agents collect discrete units, so we work with the integer part of current_quantity
-        available_integer_quantity = int(self.current_quantity)
         
-        collectable_amount = min(amount_to_collect, available_integer_quantity)
+        collectable_amount = min(amount_to_collect, self.current_quantity)
         
         if collectable_amount > 0:
-            self.current_quantity -= float(collectable_amount)
+            self.current_quantity -= collectable_amount
             # Ensure resources don't go below zero (shouldn't happen with min logic)
             self.current_quantity = max(0.0, self.current_quantity)
             print(f"Node at {self.position} ({self.resource_type.name}) collected {collectable_amount}, remaining: {self.current_quantity:.2f}") # Debug
@@ -1591,7 +1619,7 @@ class WheatField(ResourceNode):
         super().__init__(
             position=position,
             capacity=config.WHEAT_FIELD_CAPACITY, 
-            generation_rate=config.WHEAT_GENERATION_RATE,
+            generation_interval=config.WHEAT_GENERATION_INTERVAL,
             resource_type=ResourceType.WHEAT
         )
         self.color = config.RESOURCE_VISUAL_COLORS.get(self.resource_type, (255, 255, 0)) # Default yellow if not in config
@@ -1634,6 +1662,7 @@ from typing import List, Dict, Optional, TYPE_CHECKING
 from .task import Task, GatherAndDeliverTask # Assuming task.py is in the same directory
 from .task_types import TaskType, TaskStatus
 from ..resources.resource_types import ResourceType # Assuming this path
+from ..core import config # For task generation settings
 
 # Forward references to avoid circular imports
 if TYPE_CHECKING:
@@ -1750,37 +1779,72 @@ class TaskManager:
 
     def _generate_tasks_if_needed(self):
         """
-        Example task generation logic.
-        This should be driven by the needs of the simulation (e.g., storage levels).
+        Generates tasks based on simulation state, e.g., low resource stock.
+        Currently implements logic for Berry stock.
         """
-        # Example: If less than 2 pending berry tasks, create one.
-        # This is very basic; a real system would look at resource levels in storage, demand, etc.
+        # --- Berry Task Generation ---
+        current_berry_stock = self.resource_manager_ref.get_global_resource_quantity(ResourceType.BERRY)
         
-        # Count existing pending GATHER_AND_DELIVER tasks for BERRY
-        pending_berry_gather_tasks = sum(
-            1 for task in self.pending_tasks 
-            if isinstance(task, GatherAndDeliverTask) and task.resource_type_to_gather == ResourceType.BERRY
-        )
-        # Also consider assigned tasks that are for berries
-        assigned_berry_gather_tasks = sum(
-            1 for task in self.assigned_tasks.values()
-            if isinstance(task, GatherAndDeliverTask) and task.resource_type_to_gather == ResourceType.BERRY
-        )
+        # print(f"DEBUG TaskManager: Current global berry stock: {current_berry_stock}, Min Level: {config.MIN_BERRY_STOCK_LEVEL}") # Debug
 
-        total_active_berry_tasks = pending_berry_gather_tasks + assigned_berry_gather_tasks
-
-        if total_active_berry_tasks < 2: # Maintain at least 2 active berry tasks (pending or assigned)
-            print("TaskManager: Generating new GatherAndDeliverTask for BERRY due to low active tasks.")
-            self.create_gather_task(
-                resource_type=ResourceType.BERRY,
-                quantity=10, # Gather 10 berries
-                priority=5    # Default priority
+        if current_berry_stock < config.MIN_BERRY_STOCK_LEVEL:
+            # Count existing GATHER_AND_DELIVER tasks for BERRY (pending or assigned)
+            active_berry_gather_tasks = sum(
+                1 for task in self.pending_tasks
+                if isinstance(task, GatherAndDeliverTask) and task.resource_type_to_gather == ResourceType.BERRY
             )
+            active_berry_gather_tasks += sum(
+                1 for task in self.assigned_tasks.values()
+                if isinstance(task, GatherAndDeliverTask) and task.resource_type_to_gather == ResourceType.BERRY
+            )
+
+            # print(f"DEBUG TaskManager: Active berry gather tasks: {active_berry_gather_tasks}, Max Allowed: {config.MAX_ACTIVE_BERRY_GATHER_TASKS}") # Debug
+
+            if active_berry_gather_tasks < config.MAX_ACTIVE_BERRY_GATHER_TASKS:
+                print(f"TaskManager: Low Berry Stock ({current_berry_stock} < {config.MIN_BERRY_STOCK_LEVEL}). Generating new GatherAndDeliverTask for BERRY.")
+                self.create_gather_task(
+                    resource_type=ResourceType.BERRY,
+                    quantity=config.BERRY_GATHER_TASK_QUANTITY,
+                    priority=config.BERRY_GATHER_TASK_PRIORITY
+                )
+            # else:
+                # print(f"DEBUG TaskManager: Berry stock low, but max active berry tasks ({config.MAX_ACTIVE_BERRY_GATHER_TASKS}) reached.") # Debug
+        # else:
+            # print(f"DEBUG TaskManager: Berry stock ({current_berry_stock}) is sufficient. No new berry task needed.") # Debug
+
+# --- Wheat Task Generation ---
+        current_wheat_stock = self.resource_manager_ref.get_global_resource_quantity(ResourceType.WHEAT)
         
+        # print(f"DEBUG TaskManager: Current global wheat stock: {current_wheat_stock}, Min Level: {config.MIN_WHEAT_STOCK_LEVEL}") # Debug
+
+        if current_wheat_stock < config.MIN_WHEAT_STOCK_LEVEL:
+            active_wheat_gather_tasks = sum(
+                1 for task in self.pending_tasks
+                if isinstance(task, GatherAndDeliverTask) and task.resource_type_to_gather == ResourceType.WHEAT
+            )
+            active_wheat_gather_tasks += sum(
+                1 for task in self.assigned_tasks.values()
+                if isinstance(task, GatherAndDeliverTask) and task.resource_type_to_gather == ResourceType.WHEAT
+            )
+
+            # print(f"DEBUG TaskManager: Active wheat gather tasks: {active_wheat_gather_tasks}, Max Allowed: {config.MAX_ACTIVE_WHEAT_GATHER_TASKS}") # Debug
+
+            if active_wheat_gather_tasks < config.MAX_ACTIVE_WHEAT_GATHER_TASKS:
+                print(f"TaskManager: Low Wheat Stock ({current_wheat_stock} < {config.MIN_WHEAT_STOCK_LEVEL}). Generating new GatherAndDeliverTask for WHEAT.")
+                self.create_gather_task(
+                    resource_type=ResourceType.WHEAT,
+                    quantity=config.WHEAT_GATHER_TASK_QUANTITY,
+                    priority=config.WHEAT_GATHER_TASK_PRIORITY
+                )
+            # else:
+                # print(f"DEBUG TaskManager: Wheat stock low, but max active wheat tasks ({config.MAX_ACTIVE_WHEAT_GATHER_TASKS}) reached.") # Debug
+        # else:
+            # print(f"DEBUG TaskManager: Wheat stock ({current_wheat_stock}) is sufficient. No new wheat task needed.") # Debug
+        # TODO: Future: Add logic for other resource types here, following a similar pattern.
         # Example: Check Wheat storage and create tasks if low (conceptual)
-        # flour_storage = self.resource_manager_ref.get_storage_for_resource(ResourceType.FLOUR_POWDER)
-        # if flour_storage and flour_storage.get_current_load_of_type(ResourceType.FLOUR_POWDER) < 20:
-        #     # Create task to make flour, or gather wheat if mills need it
+        # current_wheat_stock = self.resource_manager_ref.get_global_resource_quantity(ResourceType.WHEAT)
+        # if current_wheat_stock < getattr(config, 'MIN_WHEAT_STOCK_LEVEL', 0): # Assuming MIN_WHEAT_STOCK_LEVEL in config
+        #     # ... similar logic to create wheat gathering tasks ...
         #     pass
 
 
@@ -1963,6 +2027,7 @@ class GatherAndDeliverTask(Task):
             # This should ideally consider the quantity we intend to gather.
             # The quantity to reserve should be min(self.quantity_to_gather, agent.inventory_capacity)
             qty_to_reserve_for_delivery = min(self.quantity_to_gather, agent.inventory_capacity)
+            qty_to_reserve_for_delivery = min(self.target_resource_node_ref.current_quantity, qty_to_reserve_for_delivery) # Don't reserve more than available
 
             all_storage_points = resource_manager.storage_points # Assuming direct access
             for sp in sorted(all_storage_points, key=lambda s: (s.position - agent.position).length_squared()):
