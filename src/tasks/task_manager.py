@@ -2,9 +2,10 @@ import uuid
 import time
 from typing import List, Dict, Optional, TYPE_CHECKING
 
-from .task import Task, GatherAndDeliverTask # Assuming task.py is in the same directory
+from .task import Task, GatherAndDeliverTask, DeliverWheatToMillTask # Added DeliverWheatToMillTask
 from .task_types import TaskType, TaskStatus
 from ..resources.resource_types import ResourceType # Assuming this path
+from ..resources.mill import Mill # For checking Mill instances
 from ..core import config # For task generation settings
 
 # Forward references to avoid circular imports
@@ -58,6 +59,25 @@ class TaskManager:
             target_dropoff_id=target_dropoff_id
         )
         self.add_task(task)
+        return task
+
+    def create_deliver_wheat_to_mill_task(self,
+                                          quantity: int,
+                                          priority: int) -> Optional[Task]:
+        """
+        Creates a new DeliverWheatToMillTask and adds it to the pending list.
+        Agents undertaking this task must have an empty inventory.
+        """
+        # Future: Could add pre-checks for wheat in storage or mill availability,
+        # but task.prepare() will handle the detailed validation and reservation.
+        task = DeliverWheatToMillTask(
+            priority=priority,
+            quantity_to_retrieve=quantity
+            # target_storage_id and target_processor_id can be set if known,
+            # otherwise task.prepare() will find them.
+        )
+        self.add_task(task)
+        print(f"DEBUG: TaskManager: Created DeliverWheatToMillTask {task.task_id} for {quantity} WHEAT, P:{priority}.")
         return task
 
     # def request_task_for_agent(self, agent: 'Agent') -> Optional[Task]:
@@ -222,12 +242,61 @@ class TaskManager:
                 print(f"DEBUG: TaskManager: Wheat stock low ({current_wheat_stock}), but max active wheat tasks ({active_wheat_gather_tasks}/{config.MAX_ACTIVE_WHEAT_GATHER_TASKS}) reached. No new WHEAT task.")
         # else:
             # print(f"DEBUG TaskManager: Wheat stock ({current_wheat_stock}) is sufficient. No new wheat task needed.") # Debug
+
+        # --- Flour (from Wheat) Task Generation ---
+        # This task involves an agent picking up Wheat from storage and delivering it to a Mill.
+        min_flour_stock_config = getattr(config, 'MIN_FLOUR_STOCK_LEVEL', 20)
+        current_flour_stock = self.resource_manager_ref.get_global_resource_quantity(ResourceType.FLOUR_POWDER)
+        print(f"DEBUG_FLOUR_TASK: Current Flour: {current_flour_stock}, Min Required: {min_flour_stock_config}")
+
+        if current_flour_stock < min_flour_stock_config:
+            print(f"DEBUG_FLOUR_TASK: Flour stock is LOW ({current_flour_stock} < {min_flour_stock_config}). Proceeding with checks.")
+            
+            process_wheat_qty_config = getattr(config, 'PROCESS_WHEAT_TASK_QUANTITY', 10)
+            wheat_in_storage = self.resource_manager_ref.get_global_resource_quantity(ResourceType.WHEAT)
+            print(f"DEBUG_FLOUR_TASK: Wheat in storage: {wheat_in_storage}, Required for task: {process_wheat_qty_config}")
+            
+            mill_can_accept = False
+            print(f"DEBUG_FLOUR_TASK: Checking Mills... Total stations: {len(self.resource_manager_ref.processing_stations)}")
+            for i, station in enumerate(self.resource_manager_ref.processing_stations):
+                is_mill_instance = isinstance(station, Mill)
+                can_accept_input = False
+                if is_mill_instance:
+                    can_accept_input = station.can_accept_input(ResourceType.WHEAT, 1)
+                print(f"DEBUG_FLOUR_TASK: Station {i}: Type={type(station).__name__}, IsMill={is_mill_instance}, CanAcceptWheat={can_accept_input}, Pos={station.position if hasattr(station, 'position') else 'N/A'}")
+                if is_mill_instance and can_accept_input:
+                    mill_can_accept = True
+                    print(f"DEBUG_FLOUR_TASK: Found suitable Mill: {station.position}")
+                    break
+            print(f"DEBUG_FLOUR_TASK: Mill can accept WHEAT: {mill_can_accept}")
+            
+            if wheat_in_storage >= process_wheat_qty_config and mill_can_accept:
+                print(f"DEBUG_FLOUR_TASK: Wheat available ({wheat_in_storage} >= {process_wheat_qty_config}) AND Mill can accept. Checking active tasks...")
+                active_process_wheat_tasks = sum(
+                    1 for task in self.pending_tasks + list(self.assigned_tasks.values())
+                    if isinstance(task, DeliverWheatToMillTask)
+                )
+                max_active_config = getattr(config, 'MAX_ACTIVE_PROCESS_WHEAT_TASKS', 2)
+                print(f"DEBUG_FLOUR_TASK: Active DeliverWheatToMill tasks: {active_process_wheat_tasks}, Max Allowed: {max_active_config}")
+
+                if active_process_wheat_tasks < max_active_config:
+                    print(f"DEBUG_FLOUR_TASK: All conditions met. Generating new DeliverWheatToMillTask.")
+                    self.create_deliver_wheat_to_mill_task(
+                        quantity=process_wheat_qty_config,
+                        priority=getattr(config, 'PROCESS_WHEAT_TASK_PRIORITY', 75)
+                    )
+                else:
+                    print(f"DEBUG_FLOUR_TASK: Max active DeliverWheatToMill tasks ({active_process_wheat_tasks}/{max_active_config}) reached. No new task.")
+            else:
+                print(f"DEBUG_FLOUR_TASK: Conditions not met for task creation:")
+                if not (wheat_in_storage >= process_wheat_qty_config):
+                    print(f"DEBUG_FLOUR_TASK: -> Not enough WHEAT in storage ({wheat_in_storage} < {process_wheat_qty_config}).")
+                if not mill_can_accept:
+                    print(f"DEBUG_FLOUR_TASK: -> No Mill can accept WHEAT currently.")
+        else:
+            print(f"DEBUG_FLOUR_TASK: Flour stock ({current_flour_stock}) is sufficient (>= {min_flour_stock_config}). No new DeliverWheatToMill task needed.")
+
         # TODO: Future: Add logic for other resource types here, following a similar pattern.
-        # Example: Check Wheat storage and create tasks if low (conceptual)
-        # current_wheat_stock = self.resource_manager_ref.get_global_resource_quantity(ResourceType.WHEAT)
-        # if current_wheat_stock < getattr(config, 'MIN_WHEAT_STOCK_LEVEL', 0): # Assuming MIN_WHEAT_STOCK_LEVEL in config
-        #     # ... similar logic to create wheat gathering tasks ...
-        #     pass
 
 
     def get_task_by_id(self, task_id: uuid.UUID) -> Optional[Task]:

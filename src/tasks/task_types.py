@@ -17,6 +17,10 @@ class TaskStatus(Enum):
     IN_PROGRESS_GATHERING = auto()
     IN_PROGRESS_MOVE_TO_DROPOFF = auto()
     IN_PROGRESS_DELIVERING = auto()
+    IN_PROGRESS_MOVE_TO_STORAGE = auto() # For moving to a storage point to collect
+    IN_PROGRESS_COLLECTING_FROM_STORAGE = auto() # For collecting from a storage point
+    IN_PROGRESS_MOVE_TO_PROCESSOR = auto() # For moving to a processing station
+    IN_PROGRESS_DELIVERING_TO_PROCESSOR = auto() # For delivering to a processing station
     # Add other IN_PROGRESS states for more complex tasks (e.g., IN_PROGRESS_PROCESSING)
     COMPLETED = auto()  # Task was successfully finished
     FAILED = auto()     # Task could not be completed

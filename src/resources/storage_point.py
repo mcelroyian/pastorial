@@ -25,7 +25,9 @@ class StoragePoint:
         self.overall_capacity = overall_capacity
         self.accepted_resource_types = accepted_resource_types
         self.stored_resources: Dict[ResourceType, int] = {}
-        self.reservations: Dict[uuid.UUID, int] = {} # task_id -> reserved_quantity
+        self.reservations: Dict[uuid.UUID, int] = {} # task_id -> reserved_quantity (for drop-off)
+        # For reserving existing stock for pickup by a task
+        self.pickup_reservations: Dict[uuid.UUID, Dict[ResourceType, int]] = {} # task_id -> {resource_type: quantity}
 
     def get_current_load(self) -> int:
         """Returns the total quantity of all resources currently physically stored."""
@@ -217,6 +219,139 @@ class StoragePoint:
             self.stored_resources[resource_type] = current_amount + quantity_to_add
             print(f"Storage at {self.position} (direct add) received {quantity_to_add} of {resource_type.name}. Total stored: {self.stored_resources.get(resource_type, 0)}")
         return quantity_to_add
+
+    # --- Methods for Reserving and Collecting Stored Resources ---
+
+    def has_resource(self, resource_type: ResourceType, quantity: int = 1) -> bool:
+        """Checks if the storage point physically contains at least the specified quantity of a resource."""
+        return self.stored_resources.get(resource_type, 0) >= quantity
+
+    def get_total_reserved_for_pickup_quantity(self, resource_type: Optional[ResourceType] = None) -> int:
+        """Returns the total quantity of a specific resource type (or all if None) currently reserved for pickup."""
+        total_reserved = 0
+        for _task_id, details in self.pickup_reservations.items():
+            if resource_type is None:
+                total_reserved += sum(details.values())
+            else:
+                total_reserved += details.get(resource_type, 0)
+        return total_reserved
+
+    def reserve_for_pickup(self, task_id: uuid.UUID, resource_type: ResourceType, quantity: int) -> int:
+        """
+        Attempts to reserve a quantity of an existing resource for a task to pick up.
+
+        Args:
+            task_id: The ID of the task making the pickup reservation.
+            resource_type: The type of resource to reserve.
+            quantity: The amount of resource to reserve for pickup.
+
+        Returns:
+            The actual quantity reserved for pickup. Can be less than requested if
+            not enough is available or 0 if type not present.
+        """
+        if self.accepted_resource_types is not None and resource_type not in self.accepted_resource_types:
+            print(f"Storage at {self.position} cannot reserve {resource_type.name} for pickup: type not accepted.")
+            return 0
+
+        # Calculate available (unreserved for pickup) quantity of the resource
+        currently_stored = self.stored_resources.get(resource_type, 0)
+        already_reserved_for_pickup = 0
+        for res_task_id, details in self.pickup_reservations.items():
+            if res_task_id != task_id: # Don't count existing reservation for the same task if modifying
+                already_reserved_for_pickup += details.get(resource_type, 0)
+        
+        available_for_this_pickup_reservation = currently_stored - already_reserved_for_pickup
+        
+        quantity_to_reserve = min(quantity, available_for_this_pickup_reservation)
+
+        if quantity_to_reserve <= 0:
+            print(f"Storage at {self.position} has no {resource_type.name} available to reserve for pickup by task {task_id} (requested {quantity}, available {available_for_this_pickup_reservation}).")
+            return 0
+
+        if task_id not in self.pickup_reservations:
+            self.pickup_reservations[task_id] = {}
+        
+        current_task_reservation_for_type = self.pickup_reservations[task_id].get(resource_type, 0)
+        self.pickup_reservations[task_id][resource_type] = current_task_reservation_for_type + quantity_to_reserve
+        
+        print(f"Storage at {self.position} reserved {quantity_to_reserve} of {resource_type.name} for PICKUP by task {task_id}. Total for task: {self.pickup_reservations[task_id][resource_type]}")
+        return quantity_to_reserve
+
+    def release_pickup_reservation(self, task_id: uuid.UUID, resource_type: Optional[ResourceType] = None, quantity_to_release: Optional[int] = None) -> bool:
+        """
+        Releases a pickup reservation made by a task.
+
+        Args:
+            task_id: The ID of the task whose pickup reservation is to be released.
+            resource_type: The specific resource type to release. If None, releases all for the task.
+            quantity_to_release: The amount of reservation to release. If None, releases all for the type/task.
+
+        Returns:
+            True if a reservation was found and released/reduced, False otherwise.
+        """
+        if task_id not in self.pickup_reservations:
+            return False
+
+        if resource_type is None: # Release all reservations for this task
+            released_details = self.pickup_reservations.pop(task_id)
+            print(f"Storage at {self.position} fully released all pickup reservations for task {task_id}: {released_details}")
+            return True
+
+        if resource_type not in self.pickup_reservations[task_id]:
+            return False # No reservation for this specific resource type by this task
+
+        if quantity_to_release is None or quantity_to_release >= self.pickup_reservations[task_id][resource_type]:
+            released_amount = self.pickup_reservations[task_id].pop(resource_type)
+            print(f"Storage at {self.position} fully released pickup reservation of {released_amount} {resource_type.name} for task {task_id}.")
+            if not self.pickup_reservations[task_id]: # If no more types reserved for this task
+                del self.pickup_reservations[task_id]
+        else:
+            self.pickup_reservations[task_id][resource_type] -= quantity_to_release
+            print(f"Storage at {self.position} reduced pickup reservation of {resource_type.name} by {quantity_to_release} for task {task_id}. Remaining: {self.pickup_reservations[task_id][resource_type]}")
+        return True
+
+    def collect_reserved_pickup(self, task_id: uuid.UUID, resource_type_to_collect: ResourceType, max_quantity_agent_can_carry: int) -> int:
+        """
+        Allows an agent to collect resources previously reserved for pickup by this task.
+        This reduces the physical stock and the pickup reservation.
+
+        Args:
+            task_id: The task ID that holds the pickup reservation.
+            resource_type_to_collect: The specific resource type the agent is trying to collect.
+            max_quantity_agent_can_carry: The maximum amount the agent can currently carry of this resource.
+
+        Returns:
+            The actual quantity collected.
+        """
+        if task_id not in self.pickup_reservations or resource_type_to_collect not in self.pickup_reservations[task_id]:
+            print(f"Error: Task {task_id} has no pickup reservation for {resource_type_to_collect.name} at {self.position}.")
+            return 0
+
+        reserved_for_task_type = self.pickup_reservations[task_id][resource_type_to_collect]
+        
+        # Amount to collect is limited by what's reserved, what agent can carry, and what's physically in stock
+        physically_in_stock = self.stored_resources.get(resource_type_to_collect, 0)
+        
+        quantity_to_collect = min(reserved_for_task_type, max_quantity_agent_can_carry, physically_in_stock)
+
+        if quantity_to_collect <= 0:
+            print(f"Storage at {self.position}: Task {task_id} cannot collect {resource_type_to_collect.name}. Reserved: {reserved_for_task_type}, Can Carry: {max_quantity_agent_can_carry}, In Stock: {physically_in_stock}")
+            return 0
+        
+        # Reduce physical stock
+        self.stored_resources[resource_type_to_collect] -= quantity_to_collect
+        if self.stored_resources[resource_type_to_collect] == 0:
+            del self.stored_resources[resource_type_to_collect]
+
+        # Reduce or remove pickup reservation
+        self.pickup_reservations[task_id][resource_type_to_collect] -= quantity_to_collect
+        if self.pickup_reservations[task_id][resource_type_to_collect] == 0:
+            del self.pickup_reservations[task_id][resource_type_to_collect]
+            if not self.pickup_reservations[task_id]: # If no more types reserved for this task
+                del self.pickup_reservations[task_id]
+        
+        print(f"Storage at {self.position}: Task {task_id} collected {quantity_to_collect} of {resource_type_to_collect.name}. Remaining stock: {self.stored_resources.get(resource_type_to_collect, 0)}, Remaining pickup reservation for type: {self.pickup_reservations.get(task_id, {}).get(resource_type_to_collect, 0)}")
+        return quantity_to_collect
 
     def draw(self, screen: pygame.Surface, grid):
         """Draws the storage point on the screen."""

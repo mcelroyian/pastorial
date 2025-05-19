@@ -18,7 +18,8 @@ GRID_COLOR = (50, 50, 50)  # Dark grey
 COLOR_BLACK = (0, 0, 0)
 COLOR_WHITE = (255, 255, 255)
 DEBUG_TEXT_COLOR = COLOR_WHITE
-
+PANEL_BACKGROUND_ALPHA = 128  # Value from 0 (transparent) to 255 (opaque)
+ 
 # Resource Node Settings
 BERRY_BUSH_COLOR = (0, 128, 0)  # Green
 BERRY_BUSH_CAPACITY = 23
@@ -60,3 +61,12 @@ MIN_WHEAT_STOCK_LEVEL = 40
 WHEAT_GATHER_TASK_QUANTITY = 15
 WHEAT_GATHER_TASK_PRIORITY = 4
 MAX_ACTIVE_WHEAT_GATHER_TASKS = 2
+# Flour Processing Task Generation Settings (DeliverWheatToMillTask)
+MIN_FLOUR_STOCK_LEVEL = 20
+PROCESS_WHEAT_TASK_QUANTITY = 10 # Amount of Wheat to retrieve from storage for one task
+PROCESS_WHEAT_TASK_PRIORITY = 75 # Higher than basic gathering
+MAX_ACTIVE_PROCESS_WHEAT_TASKS = 2 # Max concurrent tasks to take wheat to mill
+
+# Agent Action Timings (continued)
+DEFAULT_COLLECTION_TIME_FROM_STORAGE = 1.5 # Seconds to collect from a storage point
+DEFAULT_STORAGE_CAPACITY = 50

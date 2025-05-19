@@ -33,14 +33,20 @@ class TaskStatusDisplay:
         self.screen_surface = screen_surface
         self.config = config_module
 
-        self.panel_surface = pygame.Surface(self.panel_rect.size)
-        self.background_color = pygame.Color(self.config.COLOR_BLACK) # Example, use config
+        self.panel_surface = pygame.Surface(self.panel_rect.size, pygame.SRCALPHA)
+        # Assuming self.config.COLOR_BLACK is (R, G, B)
+        bg_r, bg_g, bg_b = self.config.COLOR_BLACK
+        self.background_color = pygame.Color(bg_r, bg_g, bg_b, self.config.PANEL_BACKGROUND_ALPHA)
         self.text_color = pygame.Color(self.config.DEBUG_TEXT_COLOR) # Example
         self.header_color = pygame.Color(self.config.COLOR_WHITE) # Example
         self.padding = 10
         self.line_height = self.font.get_linesize() + 2
         self.max_items_per_section = 10 # Configurable or dynamic
-
+        self.task_id_map = {}
+        self.agent_id_map = {}
+        self.next_task_display_id = 1
+        self.next_agent_display_id = 1
+ 
         # Colors for different task statuses (can be expanded)
         self.status_colors = {
             "PENDING": pygame.Color('yellow'),
@@ -68,11 +74,14 @@ class TaskStatusDisplay:
         from ..tasks.task_types import TaskStatus # Local import for enum access
 
         start_y = y_pos
-        task_id_short = str(task.task_id).split('-')[0]
+        if task.task_id not in self.task_id_map:
+            self.task_id_map[task.task_id] = self.next_task_display_id
+            self.next_task_display_id += 1
+        display_task_id = self.task_id_map[task.task_id]
         status_color = self.status_colors.get(task.status.name, self.default_status_color)
-
+ 
         # Line 1: Task ID and Type
-        line1_text = f"ID: {task_id_short} ({task.task_type.name})"
+        line1_text = f"Task: {display_task_id} ({task.task_type.name})"
         self._draw_text(surface, line1_text, (self.padding, y_pos), self.text_color, self.font)
         y_pos += self.line_height
 
@@ -83,8 +92,11 @@ class TaskStatusDisplay:
 
         # Line 3: Agent (if assigned)
         if task.agent_id:
-            agent_id_short = str(task.agent_id).split('-')[0]
-            line3_text = f"Agent: {agent_id_short}"
+            if task.agent_id not in self.agent_id_map:
+                self.agent_id_map[task.agent_id] = self.next_agent_display_id
+                self.next_agent_display_id += 1
+            display_agent_id = self.agent_id_map[task.agent_id]
+            line3_text = f"Agent: {display_agent_id}"
             self._draw_text(surface, line3_text, (self.padding + 10, y_pos), self.text_color, self.font)
             y_pos += self.line_height
 

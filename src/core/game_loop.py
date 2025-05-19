@@ -28,7 +28,8 @@ class GameLoop:
         self.last_time = time.perf_counter()
         self.accumulator = 0.0
         self.dt = 1.0 / config.TARGET_FPS # Timestep duration
-
+        self.show_task_panel = True # Added for toggling task panel visibility
+ 
         # Initialize Grid
         try:
             self.grid = Grid()
@@ -106,8 +107,11 @@ class GameLoop:
 
     def handle_input(self):
         """Handles user input using the input handler module."""
-        if input_handlers.process_events():
+        user_actions = input_handlers.process_events()
+        if user_actions['quit']:
             self.is_running = False
+        if user_actions['toggle_panel']:
+            self.show_task_panel = not self.show_task_panel
 
     def _spawn_initial_resources(self):
         """Creates and places the initial resource nodes."""
@@ -157,7 +161,7 @@ class GameLoop:
         storage_position_grid = self.grid.screen_to_grid(middle_screen_pixel_pos)
 
         # Define storage point properties
-        capacity = 25  # Updated capacity for shared storage
+        capacity = config.DEFAULT_STORAGE_CAPACITY  # Updated capacity for shared storage
         accepted_types = [ResourceType.BERRY, ResourceType.WHEAT]
 
         # Create and add the storage point
@@ -219,7 +223,7 @@ class GameLoop:
         debug_renderer.display_fps(self.screen, self.clock)
 
         # Draw the Task Status Display Panel
-        if hasattr(self, 'task_display'): # Ensure it's initialized
+        if hasattr(self, 'task_display') and self.show_task_panel: # Ensure it's initialized and toggled on
             self.task_display.draw()
 
         pygame.display.flip() # Update the full display Surface to the screen

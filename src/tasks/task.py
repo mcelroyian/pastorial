@@ -340,3 +340,238 @@ class GatherAndDeliverTask(Task):
         elif self.status == TaskStatus.PREPARING:
             return f"Preparing to gather {self.resource_type_to_gather.name}"
         return f"Gather/Deliver {self.resource_type_to_gather.name} (Status: {self.status.name})"
+# TaskType.PROCESS_RESOURCE will be used for this.
+class DeliverWheatToMillTask(Task):
+    """
+    A task for an agent to retrieve Wheat from a StoragePoint and deliver it to a Mill.
+    The agent's inventory must be empty at the start.
+    The agent is free after delivering the Wheat to the Mill.
+    """
+
+    def __init__(self,
+                 priority: int,
+                 quantity_to_retrieve: int,
+                 target_storage_id: Optional[uuid.UUID] = None, # Optional: specific storage
+                 target_processor_id: Optional[uuid.UUID] = None): # Optional: specific mill
+        super().__init__(TaskType.PROCESS_RESOURCE, priority)
+        self.resource_to_retrieve: ResourceType = ResourceType.WHEAT
+        self.quantity_to_retrieve: int = quantity_to_retrieve # Target amount for this task
+
+        # These will be populated during prepare() or if pre-assigned
+        self.target_storage_ref: Optional['StoragePoint'] = None
+        self.target_processor_ref: Optional['ProcessingStation'] = None # Specifically a Mill
+
+        self.quantity_retrieved: int = 0 # From storage to agent inventory
+        self.quantity_delivered_to_processor: int = 0 # From agent inventory to mill
+
+        self.reserved_at_storage_for_pickup_quantity: int = 0
+        
+        self._current_step_key: str = "initial" # Initial step
+
+    def prepare(self, agent: 'Agent', resource_manager: 'ResourceManager') -> bool:
+        from ..resources.mill import Mill # Specific check for Mill
+
+        self._update_timestamp()
+        self.status = TaskStatus.PREPARING
+        agent.target_position = None
+
+        if agent.current_inventory['quantity'] > 0:
+            self.error_message = f"Agent {agent.id} inventory is not empty (has {agent.current_inventory['quantity']} of {agent.current_inventory['resource_type']}). Cannot start DeliverWheatToMillTask."
+            self.status = TaskStatus.FAILED
+            return False
+
+        # 1. Find and Reserve Wheat at StoragePoint
+        if not self.target_storage_ref:
+            # Find nearest StoragePoint that has WHEAT and allows pickup
+            candidate_storages = [
+                sp for sp in resource_manager.storage_points 
+                if sp.has_resource(self.resource_to_retrieve, 1) # Check if at least 1 unit is present
+            ]
+            # Sort by distance to agent
+            candidate_storages.sort(key=lambda s: (s.position - agent.position).length_squared())
+
+            for sp in candidate_storages:
+                # How much to try to reserve: min of task goal, agent capacity
+                qty_to_attempt_reserve_pickup = min(self.quantity_to_retrieve - self.quantity_retrieved, agent.inventory_capacity)
+                if qty_to_attempt_reserve_pickup <= 0: continue # Should not happen if quantity_to_retrieve > 0
+
+                reserved_amount = sp.reserve_for_pickup(self.task_id, self.resource_to_retrieve, qty_to_attempt_reserve_pickup)
+                if reserved_amount > 0:
+                    self.target_storage_ref = sp
+                    self.reserved_at_storage_for_pickup_quantity = reserved_amount
+                    break
+        
+        if not self.target_storage_ref or self.reserved_at_storage_for_pickup_quantity == 0:
+            self.error_message = f"Could not find or reserve {self.resource_to_retrieve.name} at any StoragePoint for pickup."
+            self.status = TaskStatus.FAILED
+            return False
+
+        # 2. Find Mill
+        if not self.target_processor_ref:
+            candidate_processors = [
+                p for p in resource_manager.processing_stations
+                if isinstance(p, Mill) and p.can_accept_input(self.resource_to_retrieve, 1) # Mill accepts Wheat and has space for at least 1
+            ]
+            # Sort by distance to the storage point (or agent, depending on strategy)
+            candidate_processors.sort(key=lambda p: (p.position - self.target_storage_ref.position).length_squared())
+            
+            if candidate_processors:
+                self.target_processor_ref = candidate_processors[0]
+            
+        if not self.target_processor_ref:
+            self.error_message = f"Could not find a suitable Mill that accepts {self.resource_to_retrieve.name}."
+            # Release pickup reservation if mill not found
+            if self.target_storage_ref and self.reserved_at_storage_for_pickup_quantity > 0:
+                self.target_storage_ref.release_pickup_reservation(self.task_id, self.resource_to_retrieve, self.reserved_at_storage_for_pickup_quantity)
+                self.reserved_at_storage_for_pickup_quantity = 0
+            self.status = TaskStatus.FAILED
+            return False
+
+        # If all preparations are successful:
+        self.status = TaskStatus.IN_PROGRESS_MOVE_TO_STORAGE
+        self._current_step_key = "move_to_storage"
+        agent.set_objective_move_to_storage(self.target_storage_ref.position)
+        print(f"Task {self.task_id} (DeliverWheatToMill) PREPARED for agent {agent.id}. Target Storage: {self.target_storage_ref.position}, Target Mill: {self.target_processor_ref.position}, Reserved Pickup Qty: {self.reserved_at_storage_for_pickup_quantity}")
+        return True
+
+    def execute_step(self, agent: 'Agent', dt: float, resource_manager: 'ResourceManager') -> TaskStatus:
+        self._update_timestamp()
+
+        if not self.target_storage_ref or not self.target_processor_ref:
+            self.error_message = "Target storage or processor became invalid during execution."
+            self.status = TaskStatus.FAILED
+            return self.status
+
+        # --- Step: Move to StoragePoint ---
+        if self._current_step_key == "move_to_storage":
+            agent.set_objective_move_to_storage(self.target_storage_ref.position)
+            if agent.move_towards_current_target(dt): # Agent reached storage
+                self._current_step_key = "collect_from_storage"
+                self.status = TaskStatus.IN_PROGRESS_COLLECTING_FROM_STORAGE
+                # Use a config for collection time, e.g., agent.config.DEFAULT_COLLECTION_TIME_FROM_STORAGE
+                # For now, using existing DEFAULT_GATHERING_TIME
+                agent.set_objective_collect_from_storage(getattr(agent.config, "DEFAULT_COLLECTION_TIME_FROM_STORAGE", agent.config.DEFAULT_GATHERING_TIME))
+            return self.status
+
+        # --- Step: Collect from StoragePoint ---
+        elif self._current_step_key == "collect_from_storage":
+            # Agent's gathering_timer (reused for collection) ticks down in agent.update()
+            if agent.gathering_timer <= 0:
+                can_carry_more = agent.inventory_capacity - agent.current_inventory['quantity']
+                
+                # Amount to collect is what was reserved for pickup for this task, up to what agent can carry
+                amount_to_attempt_collect = min(
+                    can_carry_more,
+                    self.reserved_at_storage_for_pickup_quantity - self.quantity_retrieved # what's left of our reservation
+                )
+
+                if amount_to_attempt_collect > 0:
+                    collected_qty = self.target_storage_ref.collect_reserved_pickup(
+                        self.task_id, 
+                        self.resource_to_retrieve, 
+                        amount_to_attempt_collect
+                    )
+                    
+                    if collected_qty > 0:
+                        if agent.current_inventory['resource_type'] is None or agent.current_inventory['resource_type'] == self.resource_to_retrieve:
+                            agent.current_inventory['resource_type'] = self.resource_to_retrieve
+                            agent.current_inventory['quantity'] += collected_qty
+                            self.quantity_retrieved += collected_qty
+                            # self.reserved_at_storage_for_pickup_quantity -= collected_qty # This is handled by collect_reserved_pickup
+                            print(f"Task {self.task_id}: Agent {agent.id} collected {collected_qty} {self.resource_to_retrieve.name} from storage. Total retrieved for task: {self.quantity_retrieved}")
+                        else:
+                            self.error_message = "Agent inventory has different resource type during collection from storage."
+                            self.status = TaskStatus.FAILED
+                            return self.status
+                    elif collected_qty == 0 and amount_to_attempt_collect > 0 : # Attempted to collect but got nothing
+                         self.error_message = f"Failed to collect reserved {self.resource_to_retrieve.name} from storage {self.target_storage_ref.position}."
+                         self.status = TaskStatus.FAILED # Or retry logic
+                         return self.status
+
+                # Transition to moving to mill if enough retrieved or agent full
+                # This task assumes one trip from storage to mill.
+                if self.quantity_retrieved > 0: # If anything was collected
+                    self._current_step_key = "move_to_mill"
+                    self.status = TaskStatus.IN_PROGRESS_MOVE_TO_PROCESSOR
+                    agent.set_objective_move_to_processor(self.target_processor_ref.position)
+                elif self.reserved_at_storage_for_pickup_quantity <= self.quantity_retrieved : # Reservation exhausted or met
+                     self.error_message = f"Reservation for {self.resource_to_retrieve.name} at storage {self.target_storage_ref.position} exhausted before collecting anything for agent."
+                     self.status = TaskStatus.FAILED # Failed to get anything useful
+                     return self.status
+
+            return self.status
+
+        # --- Step: Move to Mill ---
+        elif self._current_step_key == "move_to_mill":
+            agent.set_objective_move_to_processor(self.target_processor_ref.position)
+            if agent.move_towards_current_target(dt): # Agent reached mill
+                self._current_step_key = "deliver_to_mill"
+                self.status = TaskStatus.IN_PROGRESS_DELIVERING_TO_PROCESSOR
+                agent.set_objective_deliver_to_processor(agent.config.DEFAULT_DELIVERY_TIME)
+            return self.status
+
+        # --- Step: Deliver to Mill ---
+        elif self._current_step_key == "deliver_to_mill":
+            # Agent's delivery_timer ticks down in agent.update()
+            if agent.delivery_timer <= 0:
+                amount_to_deliver = agent.current_inventory['quantity']
+                if amount_to_deliver > 0 and agent.current_inventory['resource_type'] == self.resource_to_retrieve:
+                    # Mill's receive method
+                    delivered_qty = self.target_processor_ref.receive(self.resource_to_retrieve, amount_to_deliver)
+                    
+                    if delivered_qty > 0:
+                        agent.current_inventory['quantity'] -= delivered_qty
+                        self.quantity_delivered_to_processor += delivered_qty
+                        print(f"Task {self.task_id}: Agent {agent.id} delivered {delivered_qty} {self.resource_to_retrieve.name} to Mill. Total delivered: {self.quantity_delivered_to_processor}")
+                        if agent.current_inventory['quantity'] == 0:
+                            agent.current_inventory['resource_type'] = None
+                        
+                        # Task is complete once all retrieved items are delivered
+                        if self.quantity_delivered_to_processor >= self.quantity_retrieved:
+                            self.status = TaskStatus.COMPLETED
+                        # If agent delivered some but still has more (shouldn't happen if mill takes all),
+                        # or if mill couldn't take all, this task might need more complex logic or fail.
+                        # For now, assume mill takes what it can, and task completes if agent is empty.
+                        elif agent.current_inventory['quantity'] == 0 :
+                             self.status = TaskStatus.COMPLETED # Agent delivered all it had from this trip.
+                    else: # Mill did not accept anything
+                        self.error_message = f"Mill {self.target_processor_ref.position} failed to receive {amount_to_deliver} of {self.resource_to_retrieve.name}."
+                        self.status = TaskStatus.FAILED
+                        return self.status
+                elif amount_to_deliver == 0 : # Agent arrived at mill with nothing
+                     self.error_message = f"Agent arrived at mill with no {self.resource_to_retrieve.name} to deliver."
+                     self.status = TaskStatus.FAILED # Should have been caught earlier
+                     return self.status
+            return self.status
+        
+        return self.status
+
+    def cleanup(self, agent: 'Agent', resource_manager: 'ResourceManager', success: bool):
+        self._update_timestamp()
+        print(f"Task {self.task_id} (DeliverWheatToMill) cleanup. Success: {success}. Agent: {agent.id}")
+        
+        # Release any remaining pickup reservation at the storage point
+        if self.target_storage_ref and self.task_id in self.target_storage_ref.pickup_reservations:
+            # Check if there's still a reservation for the specific resource type
+            if self.resource_to_retrieve in self.target_storage_ref.pickup_reservations[self.task_id]:
+                amount_still_reserved = self.target_storage_ref.pickup_reservations[self.task_id][self.resource_to_retrieve]
+                if amount_still_reserved > 0:
+                    self.target_storage_ref.release_pickup_reservation(self.task_id, self.resource_to_retrieve, amount_still_reserved)
+                    print(f"Task {self.task_id}: Released remaining pickup reservation of {amount_still_reserved} {self.resource_to_retrieve.name} from storage {self.target_storage_ref.position}")
+            # Clean up task entry if empty
+            if not self.target_storage_ref.pickup_reservations.get(self.task_id):
+                 self.target_storage_ref.pickup_reservations.pop(self.task_id, None)
+
+
+    def get_target_description(self) -> str:
+        if self.status == TaskStatus.PREPARING:
+            return f"Preparing to retrieve {self.resource_to_retrieve.name} for Mill"
+        if self._current_step_key == "move_to_storage" and self.target_storage_ref:
+            return f"Moving to Storage at {self.target_storage_ref.position} for {self.resource_to_retrieve.name}"
+        elif self._current_step_key == "collect_from_storage" and self.target_storage_ref:
+            return f"Collecting {self.resource_to_retrieve.name} from Storage at {self.target_storage_ref.position}"
+        elif self._current_step_key == "move_to_mill" and self.target_processor_ref:
+            return f"Moving {self.resource_to_retrieve.name} to Mill at {self.target_processor_ref.position}"
+        elif self._current_step_key == "deliver_to_mill" and self.target_processor_ref:
+            return f"Delivering {self.resource_to_retrieve.name} to Mill at {self.target_processor_ref.position}"
+        return f"Process {self.resource_to_retrieve.name} (Status: {self.status.name})"

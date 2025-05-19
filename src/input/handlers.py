@@ -3,9 +3,13 @@ import pygame
 def process_events():
     """
     Processes Pygame events.
-    Returns True if the game should quit, False otherwise.
+    Returns a dictionary of actions, e.g., {'quit': False, 'toggle_panel': False}.
     """
+    actions = {'quit': False, 'toggle_panel': False}
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
-            return True # Signal to quit
-    return False # Continue running
+            actions['quit'] = True
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_t:
+                actions['toggle_panel'] = True
+    return actions

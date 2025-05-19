@@ -7,8 +7,8 @@ import math # For math.inf
 
 from ..resources.resource_types import ResourceType
 from ..core import config # Agent still uses config for timers, capacity if not overridden by task
-from ..tasks.task import GatherAndDeliverTask
-from ..tasks.task_types import TaskStatus
+from ..tasks.task import GatherAndDeliverTask, DeliverWheatToMillTask # Added DeliverWheatToMillTask
+from ..tasks.task_types import TaskStatus, TaskType # Added TaskType
 
 # Forward references for type hinting
 if TYPE_CHECKING:
@@ -76,6 +76,7 @@ class Agent:
             AgentState.DELIVERING_TO_PROCESSOR: (138, 43, 226),
             AgentState.COLLECTING_FROM_PROCESSOR: (0, 128, 128),
             AgentState.EVALUATING_TASKS: (200, 200, 200), # Light grey for evaluating
+            # AgentState.COLLECTING_FROM_STORAGE will reuse GATHERING_RESOURCE color
         }
         self.target_tolerance = 0.1
         self.task_evaluation_cooldown = 1.0 # Seconds before trying to evaluate tasks again if none found
@@ -154,6 +155,12 @@ class Agent:
         self.gathering_timer = collection_time # Assuming gathering_timer can be reused
         self.target_position = None
 
+    def set_objective_collect_from_storage(self, collection_time: float):
+        """Sets the agent's state to GATHERING_RESOURCE (reused for collecting from storage) and starts the timer."""
+        self.state = AgentState.GATHERING_RESOURCE # Reusing GATHERING_RESOURCE state
+        self.gathering_timer = collection_time
+        self.target_position = None # Agent is at the storage point
+
     def move_towards_current_target(self, dt: float) -> bool:
         """
         Moves the agent towards its current target position.
@@ -204,62 +211,94 @@ class Agent:
         Evaluates available tasks and selects one based on agent's logic,
         checking for resource availability, dropoff space, and inventory compatibility.
         """
-        # Removed local import: from ..tasks.task import GatherAndDeliverTask
+        from ..resources.mill import Mill # For checking Mill instances
 
         candidate_tasks: List[Task] = []
 
         for task in available_tasks:
-            if not isinstance(task, GatherAndDeliverTask): # For now, only evaluate GatherAndDeliverTasks
-                print(f"DEBUG: Agent {self.id} skipping non-GatherAndDeliverTask {task.task_id} ({task.task_type.name}).")
-                continue
+            # --- GatherAndDeliverTask Evaluation ---
+            if isinstance(task, GatherAndDeliverTask):
+                task_resource_type = task.resource_type_to_gather
+                print(f"DEBUG: Agent {self.id} evaluating GatherAndDeliverTask {task.task_id} for resource {task_resource_type.name}.")
 
-            task_resource_type = task.resource_type_to_gather
-            print(f"DEBUG: Agent {self.id} evaluating task {task.task_id} ({task.task_type.name}) for resource {task_resource_type.name}.")
-
-            # 1. Check Agent's Resource Priorities
-            if self.resource_priorities and task_resource_type not in self.resource_priorities:
-                print(f"DEBUG: Agent {self.id}: Task {task.task_id} resource {task_resource_type.name} not in priorities {self.resource_priorities}. Skipping.")
-                continue
-            
-            # 2. Check Source Availability (using ResourceManager)
-            if not resource_manager.has_available_sources(task_resource_type, min_quantity=1):
-                print(f"DEBUG: Agent {self.id}: Task {task.task_id} - No available sources for {task_resource_type.name}. Skipping.")
-                continue
-            
-            # 3. Check Dropoff Availability (using ResourceManager)
-            # Consider quantity agent might carry - for now, just check if *any* space.
-            # A more advanced check would be: min_capacity = min(self.inventory_capacity, task.quantity_to_gather)
-            if not resource_manager.has_available_dropoffs(task_resource_type, min_capacity=1):
-                print(f"DEBUG: Agent {self.id}: Task {task.task_id} - No available dropoffs for {task_resource_type.name}. Skipping.")
-                continue
-
-            # 4. Check Agent Inventory Compatibility & Capacity
-            current_inv_qty = self.current_inventory.get('quantity', 0)
-            current_inv_type = self.current_inventory.get('resource_type')
-
-            if current_inv_qty > 0 and current_inv_type != task_resource_type:
-                remaining_capacity = self.inventory_capacity - current_inv_qty
-                # Define a 'meaningful amount' - e.g., at least 1 unit or a percentage of capacity
-                # For simplicity, let's say if it's carrying something else, it needs full capacity for the new task type
-                # or at least capacity for 1 unit of the new type.
-                # This logic can be refined. For now, if carrying something else, and not enough space for at least 1 new unit, skip.
-                if remaining_capacity < 1 : # Needs to be able to carry at least 1 of the new type
-                    print(f"DEBUG: Agent {self.id}: Task {task.task_id} - Inventory has {current_inv_qty} of {current_inv_type}, not enough space for {task_resource_type.name}. Skipping.")
+                # 1. Check Agent's Resource Priorities
+                if self.resource_priorities and task_resource_type not in self.resource_priorities:
+                    print(f"DEBUG: Agent {self.id}: Task {task.task_id} resource {task_resource_type.name} not in priorities. Skipping.")
                     continue
+                
+                # 2. Check Source Availability (ResourceNode)
+                if not resource_manager.has_available_sources(task_resource_type, min_quantity=1):
+                    print(f"DEBUG: Agent {self.id}: Task {task.task_id} - No available sources for {task_resource_type.name}. Skipping.")
+                    continue
+                
+                # 3. Check Dropoff Availability (StoragePoint)
+                if not resource_manager.has_available_dropoffs(task_resource_type, min_capacity=1): # min_capacity for reservation
+                    print(f"DEBUG: Agent {self.id}: Task {task.task_id} - No available dropoffs for {task_resource_type.name}. Skipping.")
+                    continue
+
+                # 4. Check Agent Inventory Compatibility & Capacity
+                current_inv_qty = self.current_inventory.get('quantity', 0)
+                current_inv_type = self.current_inventory.get('resource_type')
+
+                if current_inv_qty > 0 and current_inv_type != task_resource_type:
+                    if (self.inventory_capacity - current_inv_qty) < 1 : # Needs to be able to carry at least 1 of the new type
+                        print(f"DEBUG: Agent {self.id}: Task {task.task_id} - Inventory has {current_inv_qty} of {current_inv_type}, not enough space for {task_resource_type.name}. Skipping.")
+                        continue
+                
+                if current_inv_qty == self.inventory_capacity and (current_inv_type != task_resource_type or task.quantity_to_gather > 0) :
+                    print(f"DEBUG: Agent {self.id}: Task {task.task_id} - Inventory full with {current_inv_type}, cannot take task for {task_resource_type.name}. Skipping.")
+                    continue
+                
+                print(f"DEBUG: Agent {self.id}: Task {task.task_id} ({task_resource_type.name}) PASSED GatherAndDeliver checks.")
+                candidate_tasks.append(task)
+
+            # --- DeliverWheatToMillTask (TaskType.PROCESS_RESOURCE) Evaluation ---
+            elif isinstance(task, DeliverWheatToMillTask): # Check for the specific class
+                print(f"DEBUG: Agent {self.id} evaluating DeliverWheatToMillTask {task.task_id} for resource {task.resource_to_retrieve.name}.")
+
+                # 1. Agent inventory must be empty for this specific task type as per plan
+                if self.current_inventory.get('quantity', 0) > 0:
+                    print(f"DEBUG: Agent {self.id}: Task {task.task_id} (DeliverWheatToMill) - Agent inventory not empty. Skipping.")
+                    continue
+
+                # 2. Check if Wheat is available in any StoragePoint
+                # This is a simplified check; task.prepare() will do the actual reservation.
+                wheat_available_in_storage = False
+                for sp in resource_manager.storage_points:
+                    if sp.has_resource(ResourceType.WHEAT, 1): # Check for at least 1 unit
+                        wheat_available_in_storage = True
+                        break
+                if not wheat_available_in_storage:
+                    print(f"DEBUG: Agent {self.id}: Task {task.task_id} - No WHEAT found in any storage point. Skipping.")
+                    continue
+
+                # 3. Check if a Mill is available and can accept Wheat
+                # This is a simplified check; task.prepare() will find a specific mill.
+                mill_available_and_accepts = False
+                for station in resource_manager.processing_stations:
+                    if isinstance(station, Mill) and station.can_accept_input(ResourceType.WHEAT, 1):
+                        mill_available_and_accepts = True
+                        break
+                if not mill_available_and_accepts:
+                    print(f"DEBUG: Agent {self.id}: Task {task.task_id} - No Mill available or accepting WHEAT. Skipping.")
+                    continue
+                
+                print(f"DEBUG: Agent {self.id}: Task {task.task_id} ({task.resource_to_retrieve.name}) PASSED DeliverWheatToMill checks.")
+                candidate_tasks.append(task)
             
-            if current_inv_qty == self.inventory_capacity and current_inv_type != task_resource_type:
-                print(f"DEBUG: Agent {self.id}: Task {task.task_id} - Inventory full with {current_inv_type}, cannot take task for {task_resource_type.name}. Skipping.")
-                continue
-            
-            print(f"DEBUG: Agent {self.id}: Task {task.task_id} ({task_resource_type.name}) PASSED all preliminary checks.")
-            candidate_tasks.append(task)
+            else:
+                # Optionally handle other task types or log them
+                if task.task_type not in [TaskType.GATHER_AND_DELIVER, TaskType.PROCESS_RESOURCE]: # Check general task_type
+                     print(f"DEBUG: Agent {self.id} skipping unhandled task type {task.task_type.name} for task {task.task_id}.")
+                # If it's PROCESS_RESOURCE but not DeliverWheatToMillTask, it's currently unhandled by agent eval
+                elif task.task_type == TaskType.PROCESS_RESOURCE and not isinstance(task, DeliverWheatToMillTask):
+                     print(f"DEBUG: Agent {self.id} skipping PROCESS_RESOURCE task {task.task_id} as it's not DeliverWheatToMillTask.")
+
 
         if not candidate_tasks:
             print(f"DEBUG: Agent {self.id} found NO suitable tasks after full evaluation of {len(available_tasks)} initial tasks.")
             return None
 
-        # If multiple candidates, sort by task.priority (higher is better)
-        # Then could add proximity or other heuristics. For now, highest priority.
         candidate_tasks.sort(key=lambda t: t.priority, reverse=True)
         selected_task = candidate_tasks[0]
         print(f"DEBUG: Agent {self.id} selected task {selected_task.task_id} ({selected_task.task_type.name}) P:{selected_task.priority} from {len(candidate_tasks)} candidates.")
