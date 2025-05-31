@@ -11,19 +11,18 @@ if TYPE_CHECKING:
 class AgentManager:
     """Manages all agents in the simulation."""
 
-    def __init__(self, grid, task_manager: 'TaskManager', occupancy_grid: List[List[Optional[Any]]]): # Added occupancy_grid
+    def __init__(self, grid, task_manager: 'TaskManager'): # occupancy_grid removed
         """
         Initializes the AgentManager.
 
         Args:
             grid (Grid): The simulation grid object.
             task_manager (TaskManager): Reference to the task manager.
-            occupancy_grid (List[List[Optional[Any]]]): The game's occupancy grid.
         """
         self.agents: List[Agent] = []
         self.grid = grid # Store the grid object
         self.task_manager_ref: 'TaskManager' = task_manager # Store task_manager reference
-        self.occupancy_grid = occupancy_grid # Store the occupancy_grid reference
+        # self.occupancy_grid = occupancy_grid # Removed
 
     def add_agent(self, agent: Agent):
         """Adds an existing Agent instance to the manager."""
@@ -58,7 +57,7 @@ class AgentManager:
             speed=speed,
             grid=self.grid,
             task_manager=self.task_manager_ref, # Pass the TaskManager reference
-            occupancy_grid=self.occupancy_grid, # Pass the occupancy_grid
+            # occupancy_grid=self.occupancy_grid, # Removed
             inventory_capacity=inventory_capacity,
             resource_priorities=resource_priorities
         )

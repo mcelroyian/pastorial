@@ -5,10 +5,11 @@ from typing import Optional, TYPE_CHECKING
 
 from .task_types import TaskType, TaskStatus
 from ..resources.resource_types import ResourceType # Assuming this path is correct
+from ..agents.agent_defs import AgentState # Import from agent_defs
 
 # Forward references to avoid circular imports
 if TYPE_CHECKING:
-    from ..agents.agent import Agent # Assuming agent.py is in src/agents/
+    from ..agents.agent import Agent # Agent can stay for type hinting if not used directly
     from ..resources.manager import ResourceManager # Assuming manager.py is in src/resources/
     from ..resources.node import ResourceNode
     from ..resources.storage_point import StoragePoint
@@ -169,7 +170,7 @@ class GatherAndDeliverTask(Task):
 
     def execute_step(self, agent: 'Agent', dt: float, resource_manager: 'ResourceManager') -> TaskStatus:
         self._update_timestamp()
-        # from ..agents.agent import AgentState # REMOVED
+        # from ..agents.agent import AgentState # Now imported via TYPE_CHECKING
 
         if not self.target_resource_node_ref or not self.target_dropoff_ref:
             self.error_message = "Target resource or dropoff became invalid during execution."
@@ -178,15 +179,29 @@ class GatherAndDeliverTask(Task):
 
         # --- Step: Move to Resource Node ---
         if self._current_step_key == "move_to_resource":
-            # Task directs the agent to move to the resource.
-            # The agent's set_objective_move_to_resource method handles setting the state and target.
-            # No need to check agent.state here as the task is dictating the current objective.
-            agent.set_objective_move_to_resource(self.target_resource_node_ref.position)
-
-            if agent.move_towards_current_target(dt): # Agent reached the resource node
-                self._current_step_key = "gather_resource"
-                self.status = TaskStatus.IN_PROGRESS_GATHERING
-                agent.set_objective_gather_resource(agent.config.DEFAULT_GATHERING_TIME)
+            # Agent's objective (and state) was set to MOVING_TO_RESOURCE in prepare()
+            # or when transitioning to this step.
+            if agent.state == AgentState.MOVING_TO_RESOURCE:
+                # Agent is actively moving via its _follow_path() method.
+                # Task just waits for the agent to complete its movement.
+                return self.status # IN_PROGRESS_MOVE_TO_RESOURCE
+            elif agent.state == AgentState.IDLE: # Agent has stopped moving (path complete or failed)
+                if self.target_resource_node_ref and \
+                   agent.position.distance_to(self.target_resource_node_ref.position) < agent.target_tolerance:
+                    # Movement successful: Agent is at the resource node
+                    self._current_step_key = "gather_resource"
+                    self.status = TaskStatus.IN_PROGRESS_GATHERING
+                    agent.set_objective_gather_resource(agent.config.DEFAULT_GATHERING_TIME)
+                    print(f"Task {self.task_id}: Agent {agent.id} reached resource node. Starting to gather.")
+                else:
+                    # Movement failed: Agent is IDLE but not at the target
+                    self.error_message = f"Agent {agent.id} failed to reach resource node at {self.target_resource_node_ref.position if self.target_resource_node_ref else 'None'}. Current pos: {agent.position}, State: {agent.state}"
+                    print(self.error_message)
+                    self.status = TaskStatus.FAILED
+            elif agent.state not in [AgentState.MOVING_TO_RESOURCE, AgentState.GATHERING_RESOURCE]: # Agent in an unexpected state
+                self.error_message = f"Agent {agent.id} in unexpected state {agent.state} during MOVING_TO_RESOURCE phase for task {self.task_id}."
+                print(self.error_message)
+                self.status = TaskStatus.FAILED
             return self.status
 
         # --- Step: Gather Resource ---
@@ -252,13 +267,26 @@ class GatherAndDeliverTask(Task):
 
         # --- Step: Move to Dropoff ---
         elif self._current_step_key == "move_to_dropoff":
-            # Task directs the agent to move to storage.
-            agent.set_objective_move_to_storage(self.target_dropoff_ref.position)
-            
-            if agent.move_towards_current_target(dt):
-                self._current_step_key = "deliver_resource"
-                self.status = TaskStatus.IN_PROGRESS_DELIVERING
-                agent.set_objective_deliver_resource(agent.config.DEFAULT_DELIVERY_TIME)
+            # Agent's objective (and state) was set to MOVING_TO_STORAGE when transitioning.
+            if agent.state == AgentState.MOVING_TO_STORAGE:
+                return self.status # IN_PROGRESS_MOVE_TO_DROPOFF
+            elif agent.state == AgentState.IDLE:
+                if self.target_dropoff_ref and \
+                   agent.position.distance_to(self.target_dropoff_ref.position) < agent.target_tolerance:
+                    # Movement successful: Agent is at the dropoff
+                    self._current_step_key = "deliver_resource"
+                    self.status = TaskStatus.IN_PROGRESS_DELIVERING
+                    agent.set_objective_deliver_resource(agent.config.DEFAULT_DELIVERY_TIME)
+                    print(f"Task {self.task_id}: Agent {agent.id} reached dropoff. Starting to deliver.")
+                else:
+                    # Movement failed
+                    self.error_message = f"Agent {agent.id} failed to reach dropoff at {self.target_dropoff_ref.position if self.target_dropoff_ref else 'None'}. Current pos: {agent.position}, State: {agent.state}"
+                    print(self.error_message)
+                    self.status = TaskStatus.FAILED
+            elif agent.state not in [AgentState.MOVING_TO_STORAGE, AgentState.DELIVERING_RESOURCE]: # Agent in an unexpected state
+                self.error_message = f"Agent {agent.id} in unexpected state {agent.state} during MOVING_TO_DROPOFF phase for task {self.task_id}."
+                print(self.error_message)
+                self.status = TaskStatus.FAILED
             return self.status
 
         # --- Step: Deliver Resource ---
@@ -451,13 +479,26 @@ class DeliverWheatToMillTask(Task):
 
         # --- Step: Move to StoragePoint ---
         if self._current_step_key == "move_to_storage":
-            agent.set_objective_move_to_storage(self.target_storage_ref.position)
-            if agent.move_towards_current_target(dt): # Agent reached storage
-                self._current_step_key = "collect_from_storage"
-                self.status = TaskStatus.IN_PROGRESS_COLLECTING_FROM_STORAGE
-                # Use a config for collection time, e.g., agent.config.DEFAULT_COLLECTION_TIME_FROM_STORAGE
-                # For now, using existing DEFAULT_GATHERING_TIME
-                agent.set_objective_collect_from_storage(getattr(agent.config, "DEFAULT_COLLECTION_TIME_FROM_STORAGE", agent.config.DEFAULT_GATHERING_TIME))
+            # Agent's objective (and state) was set to MOVING_TO_STORAGE in prepare() or transition.
+            if agent.state == AgentState.MOVING_TO_STORAGE:
+                return self.status # IN_PROGRESS_MOVE_TO_STORAGE
+            elif agent.state == AgentState.IDLE:
+                if self.target_storage_ref and \
+                   agent.position.distance_to(self.target_storage_ref.position) < agent.target_tolerance:
+                    # Movement successful: Agent is at the storage point
+                    self._current_step_key = "collect_from_storage"
+                    self.status = TaskStatus.IN_PROGRESS_COLLECTING_FROM_STORAGE
+                    agent.set_objective_collect_from_storage(getattr(agent.config, "DEFAULT_COLLECTION_TIME_FROM_STORAGE", agent.config.DEFAULT_GATHERING_TIME))
+                    print(f"Task {self.task_id}: Agent {agent.id} reached storage for pickup. Starting collection.")
+                else:
+                    # Movement failed
+                    self.error_message = f"Agent {agent.id} failed to reach storage for pickup at {self.target_storage_ref.position if self.target_storage_ref else 'None'}. Current pos: {agent.position}, State: {agent.state}"
+                    print(self.error_message)
+                    self.status = TaskStatus.FAILED
+            elif agent.state not in [AgentState.MOVING_TO_STORAGE, AgentState.GATHERING_RESOURCE]: # GATHERING_RESOURCE is used for collecting from storage
+                self.error_message = f"Agent {agent.id} in unexpected state {agent.state} during MOVING_TO_STORAGE (for pickup) phase for task {self.task_id}."
+                print(self.error_message)
+                self.status = TaskStatus.FAILED
             return self.status
 
         # --- Step: Collect from StoragePoint ---
@@ -510,11 +551,26 @@ class DeliverWheatToMillTask(Task):
 
         # --- Step: Move to Mill ---
         elif self._current_step_key == "move_to_mill":
-            agent.set_objective_move_to_processor(self.target_processor_ref.position)
-            if agent.move_towards_current_target(dt): # Agent reached mill
-                self._current_step_key = "deliver_to_mill"
-                self.status = TaskStatus.IN_PROGRESS_DELIVERING_TO_PROCESSOR
-                agent.set_objective_deliver_to_processor(agent.config.DEFAULT_DELIVERY_TIME)
+            # Agent's objective (and state) was set to MOVING_TO_PROCESSOR when transitioning.
+            if agent.state == AgentState.MOVING_TO_PROCESSOR:
+                return self.status # IN_PROGRESS_MOVE_TO_PROCESSOR
+            elif agent.state == AgentState.IDLE:
+                if self.target_processor_ref and \
+                   agent.position.distance_to(self.target_processor_ref.position) < agent.target_tolerance:
+                    # Movement successful: Agent is at the mill
+                    self._current_step_key = "deliver_to_mill"
+                    self.status = TaskStatus.IN_PROGRESS_DELIVERING_TO_PROCESSOR
+                    agent.set_objective_deliver_to_processor(agent.config.DEFAULT_DELIVERY_TIME)
+                    print(f"Task {self.task_id}: Agent {agent.id} reached mill. Starting to deliver.")
+                else:
+                    # Movement failed
+                    self.error_message = f"Agent {agent.id} failed to reach mill at {self.target_processor_ref.position if self.target_processor_ref else 'None'}. Current pos: {agent.position}, State: {agent.state}"
+                    print(self.error_message)
+                    self.status = TaskStatus.FAILED
+            elif agent.state not in [AgentState.MOVING_TO_PROCESSOR, AgentState.DELIVERING_TO_PROCESSOR]: # Agent in an unexpected state
+                self.error_message = f"Agent {agent.id} in unexpected state {agent.state} during MOVING_TO_MILL phase for task {self.task_id}."
+                print(self.error_message)
+                self.status = TaskStatus.FAILED
             return self.status
 
         # --- Step: Deliver to Mill ---

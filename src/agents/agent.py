@@ -9,6 +9,8 @@ from ..resources.resource_types import ResourceType
 from ..core import config # Agent still uses config for timers, capacity if not overridden by task
 from ..tasks.task import GatherAndDeliverTask, DeliverWheatToMillTask # Added DeliverWheatToMillTask
 from ..tasks.task_types import TaskStatus, TaskType # Added TaskType
+from ..pathfinding.astar import find_path # A* pathfinding
+from .agent_defs import AgentState # Import AgentState from the new file
 
 # Forward references for type hinting
 if TYPE_CHECKING:
@@ -17,19 +19,7 @@ if TYPE_CHECKING:
     from ..resources.manager import ResourceManager # For passing to tasks
     # from ..core.grid import Grid # Assuming Grid class type hint
 
-
-class AgentState(Enum):
-    """Defines the possible states an agent can be in. Tasks will set these."""
-    IDLE = auto()
-    MOVING_RANDOMLY = auto()
-    MOVING_TO_RESOURCE = auto()
-    GATHERING_RESOURCE = auto()
-    MOVING_TO_STORAGE = auto()
-    DELIVERING_RESOURCE = auto()
-    MOVING_TO_PROCESSOR = auto()
-    DELIVERING_TO_PROCESSOR = auto()
-    COLLECTING_FROM_PROCESSOR = auto()
-    EVALUATING_TASKS = auto() # New state for job board interaction
+# AgentState enum has been moved to agent_defs.py
 
 class Agent:
     """Represents an autonomous agent in the simulation, executing tasks."""
@@ -40,7 +30,7 @@ class Agent:
                  speed: float,
                  grid, # 'Grid' type hint
                  task_manager: 'TaskManager',
-                 occupancy_grid: List[List[Optional[Any]]], # Added occupancy_grid
+                 # occupancy_grid: List[List[Optional[Any]]], # Removed occupancy_grid
                  inventory_capacity: int,
                  resource_priorities: Optional[List[ResourceType]] = None):
         """
@@ -51,7 +41,7 @@ class Agent:
             speed (float): The movement speed of the agent (grid units per second).
             grid (Grid): The simulation grid object.
             task_manager (TaskManager): Reference to the global task manager.
-            occupancy_grid (List[List[Optional[Any]]]): The game's occupancy grid.
+            # occupancy_grid (List[List[Optional[Any]]]): The game's occupancy grid. # Removed
             inventory_capacity (int): Maximum number of resource units the agent can carry.
             resource_priorities (Optional[List[ResourceType]]): Ordered list of resource types the agent prefers.
                                                                Might be used by TaskManager.
@@ -61,11 +51,11 @@ class Agent:
         self.speed = speed
         self.grid = grid # type: ignore
         self.task_manager_ref: 'TaskManager' = task_manager
-        self.occupancy_grid = occupancy_grid # Store the occupancy_grid
+        # self.occupancy_grid = occupancy_grid # Removed
         self.config = config
 
         self.state = AgentState.IDLE
-        self.target_position: Optional[pygame.math.Vector2] = None # Set by tasks
+        self.target_position: Optional[pygame.math.Vector2] = None # Current waypoint
         self.color = (255, 255, 0)
 
         self.state_colors = {
@@ -94,141 +84,228 @@ class Agent:
         
         self.current_task: Optional['Task'] = None
         self.resource_priorities: Optional[List[ResourceType]] = resource_priorities
+        self.current_path: Optional[List[pygame.math.Vector2]] = None # For A* path
+        self.final_destination: Optional[pygame.math.Vector2] = None # For the ultimate goal of a movement sequence
 
         self.gathering_timer: float = 0.0
         self.delivery_timer: float = 0.0
 
-    def set_target(self, target_position: pygame.math.Vector2):
-        """Sets the agent's target position. Primarily called by tasks."""
-        self.target_position = target_position
-        # The agent's state (e.g., MOVING_TO_RESOURCE) should be set by the task itself.
-        # print(f"DEBUG: Agent {self.id} set_target: NewTargetGridPos={self.target_position}")
+    def set_target(self, final_destination: pygame.math.Vector2):
+        """
+        Sets the agent's final destination and calculates the path.
+        The agent's 'target_position' will be the next waypoint in the path.
+        """
+        self.final_destination = final_destination
+        # Ensure positions are integers for pathfinding if they represent grid cells
+        current_grid_pos = pygame.math.Vector2(int(round(self.position.x)), int(round(self.position.y)))
+        final_grid_dest = pygame.math.Vector2(int(round(final_destination.x)), int(round(final_destination.y)))
+
+        if current_grid_pos == final_grid_dest:
+            self.current_path = [final_grid_dest] # Path is just the destination
+            self.target_position = final_grid_dest # Already there or very close
+            print(f"DEBUG: Agent {self.id} set_target: Already at/near final destination {final_grid_dest}.")
+            return
+
+        self.current_path = find_path(current_grid_pos, final_grid_dest, self.grid) # type: ignore
+
+        if self.current_path and len(self.current_path) > 0:
+            # Remove current position if it's the start of the path
+            if self.current_path[0] == current_grid_pos and len(self.current_path) > 1:
+                self.current_path.pop(0)
+            
+            if not self.current_path: # Path might have become empty after pop
+                self.target_position = final_grid_dest # Essentially means we are at the destination
+                print(f"DEBUG: Agent {self.id} set_target: Path to {final_grid_dest} resulted in empty path after pop (likely at destination).")
+                self.current_path = [final_grid_dest] # Ensure path isn't None
+                return
+
+            self.target_position = self.current_path[0]
+            # print(f"DEBUG: Agent {self.id} set_target: New path to {final_grid_dest}. Next waypoint: {self.target_position}. Path: {self.current_path}")
+        else:
+            self.target_position = None
+            self.current_path = None # Ensure it's None if no path
+            print(f"Warning: Agent {self.id} could not find a path from {current_grid_pos} to {final_grid_dest}.")
+            # Consider setting agent to IDLE or a "PATH_FAILED" state if path is None
+            # For now, task execution will likely fail if agent can't reach target.
+            # self.set_objective_idle() # Or a specific failure state
 
     def set_objective_idle(self):
-        """Sets the agent's state to IDLE and clears its target."""
+        """Sets the agent's state to IDLE and clears its target and path."""
         self.state = AgentState.IDLE
         self.target_position = None
+        self.current_path = None
+        self.final_destination = None
 
     def set_objective_evaluating_tasks(self):
         """Sets the agent's state to EVALUATING_TASKS."""
         self.state = AgentState.EVALUATING_TASKS
-        self.target_position = None # Typically no movement target when evaluating
+        self.target_position = None
+        self.current_path = None
+        self.final_destination = None
 
     def set_objective_move_randomly(self):
-        """Sets the agent's state to MOVING_RANDOMLY."""
+        """Sets the agent's state to MOVING_RANDOMLY and calculates a random path."""
         self.state = AgentState.MOVING_RANDOMLY
-        self.target_position = None # _move_randomly will pick a specific target
+        # _move_randomly will pick a specific target and call self.set_target()
+        self.target_position = None
+        self.current_path = None
+        self.final_destination = None
+
 
     def set_objective_move_to_resource(self, target_node_position: pygame.math.Vector2):
-        """Sets the agent's state to MOVING_TO_RESOURCE and sets the target."""
+        """Sets the agent's state to MOVING_TO_RESOURCE and calculates path."""
         self.state = AgentState.MOVING_TO_RESOURCE
-        self.target_position = target_node_position
+        self.set_target(target_node_position)
 
     def set_objective_gather_resource(self, gathering_time: float):
         """Sets the agent's state to GATHERING_RESOURCE and starts the timer."""
         self.state = AgentState.GATHERING_RESOURCE
         self.gathering_timer = gathering_time
-        self.target_position = None # Agent is at the resource
+        self.target_position = None
+        self.current_path = None
+        self.final_destination = None
+
 
     def set_objective_move_to_storage(self, storage_position: pygame.math.Vector2):
-        """Sets the agent's state to MOVING_TO_STORAGE and sets the target."""
+        """Sets the agent's state to MOVING_TO_STORAGE and calculates path."""
         self.state = AgentState.MOVING_TO_STORAGE
-        self.target_position = storage_position
+        self.set_target(storage_position)
 
     def set_objective_deliver_resource(self, delivery_time: float):
         """Sets the agent's state to DELIVERING_RESOURCE and starts the timer."""
         self.state = AgentState.DELIVERING_RESOURCE
         self.delivery_timer = delivery_time
-        self.target_position = None # Agent is at the storage
+        self.target_position = None
+        self.current_path = None
+        self.final_destination = None
+
 
     def set_objective_move_to_processor(self, processor_position: pygame.math.Vector2):
-        """Sets the agent's state to MOVING_TO_PROCESSOR and sets the target."""
+        """Sets the agent's state to MOVING_TO_PROCESSOR and calculates path."""
         self.state = AgentState.MOVING_TO_PROCESSOR
-        self.target_position = processor_position
+        self.set_target(processor_position)
 
     def set_objective_deliver_to_processor(self, delivery_time: float):
         """Sets the agent's state to DELIVERING_TO_PROCESSOR and starts the timer."""
         self.state = AgentState.DELIVERING_TO_PROCESSOR
         self.delivery_timer = delivery_time # Assuming delivery_timer can be reused
         self.target_position = None
+        self.current_path = None
+        self.final_destination = None
+
 
     def set_objective_collect_from_processor(self, collection_time: float):
         """Sets the agent's state to COLLECTING_FROM_PROCESSOR and starts a timer."""
         self.state = AgentState.COLLECTING_FROM_PROCESSOR
         self.gathering_timer = collection_time # Assuming gathering_timer can be reused
         self.target_position = None
+        self.current_path = None
+        self.final_destination = None
+
 
     def set_objective_collect_from_storage(self, collection_time: float):
         """Sets the agent's state to GATHERING_RESOURCE (reused for collecting from storage) and starts the timer."""
         self.state = AgentState.GATHERING_RESOURCE # Reusing GATHERING_RESOURCE state
         self.gathering_timer = collection_time
-        self.target_position = None # Agent is at the storage point
+        self.target_position = None
+        self.current_path = None
+        self.final_destination = None
 
-    def move_towards_current_target(self, dt: float) -> bool:
+
+    def _follow_path(self, dt: float) -> bool:
         """
-        Moves the agent towards its current target position.
+        Moves the agent along the self.current_path.
         Args: dt (float): Delta time.
-        Returns: bool: True if the target was reached this frame, False otherwise.
+        Returns: bool: True if the current waypoint in the path was reached, False otherwise.
+                       If the final destination is reached, self.current_path will be empty or None.
         """
-        if self.target_position is None:
+        if not self.current_path or not self.target_position: # target_position is the current waypoint
+            # No path to follow, or no current waypoint set from the path
+            # This might happen if path calculation failed or path is complete.
+            # Task logic should handle what to do if agent can't move.
             return False
 
+        # self.target_position is the current waypoint from self.current_path[0]
         direction = self.target_position - self.position
-        distance = direction.length()
+        distance_to_waypoint = direction.length()
 
-        if distance < self.target_tolerance:
-            self.position = pygame.math.Vector2(self.target_position)
-            self.target_position = None
-            return True
-        elif distance > 0:
+        if distance_to_waypoint < self.target_tolerance:
+            # Reached the current waypoint
+            self.position = pygame.math.Vector2(self.target_position) # Snap to waypoint
+            
+            if self.current_path: # Should always be true if target_position was set from it
+                self.current_path.pop(0) # Remove the reached waypoint
+
+            if not self.current_path: # Path is now empty, meaning final destination of this path segment reached
+                self.target_position = None
+                self.final_destination = None # Clear final destination as it's reached for this segment
+                # print(f"DEBUG: Agent {self.id} reached end of path.")
+                return True # Signifies that the movement objective for this path is complete
+            else:
+                # Set next waypoint as the target
+                self.target_position = self.current_path[0]
+                # print(f"DEBUG: Agent {self.id} reached waypoint. Next waypoint: {self.target_position}. Path left: {self.current_path}")
+                # Return False because the *overall* path (final_destination) might not be complete yet,
+                # but True could be used by task to know a step in path is done.
+                # Let's return True to indicate waypoint reached, task can check self.current_path.
+                return True # Waypoint reached, but path may continue
+
+        elif distance_to_waypoint > 0:
             normalized_direction = direction.normalize()
             potential_movement = normalized_direction * self.speed * dt
             
-            # Calculate the potential next grid cell
-            # This is a simplified check for the immediate next step.
-            # A proper pathfinder (A*) would be needed for complex obstacle avoidance.
-            if potential_movement.length_squared() > 0: # Only check if there's actual movement
-                next_pos_check = self.position + normalized_direction * self.grid.cell_width # Check one cell in direction
-                next_grid_x = int(round(next_pos_check.x))
-                next_grid_y = int(round(next_pos_check.y))
+            if potential_movement.length() >= distance_to_waypoint:
+                # Will reach or overshoot waypoint this frame
+                self.position = pygame.math.Vector2(self.target_position) # Snap to waypoint
+                
+                if self.current_path: self.current_path.pop(0)
 
-                # Check if the next grid cell is within bounds and free
-                if 0 <= next_grid_x < config.GRID_WIDTH and \
-                   0 <= next_grid_y < config.GRID_HEIGHT:
-                    # Allow moving into the target cell even if occupied (e.g. target is an entity)
-                    is_target_cell = (next_grid_x == int(round(self.target_position.x)) and \
-                                      next_grid_y == int(round(self.target_position.y)))
-                    
-                    if not is_target_cell and self.occupancy_grid[next_grid_y][next_grid_x] is not None:
-                        # print(f"DEBUG: Agent {self.id} at {self.position} sees obstacle at ({next_grid_x},{next_grid_y}) towards {self.target_position}. Halting.")
-                        return False # Blocked by an obstacle that is not the target cell
-
-            # Proceed with movement if not blocked or if it's the target cell
-            if potential_movement.length() >= distance:
-                self.position = pygame.math.Vector2(self.target_position)
-                self.target_position = None
-                return True
+                if not self.current_path:
+                    self.target_position = None
+                    self.final_destination = None
+                    # print(f"DEBUG: Agent {self.id} reached end of path by moving.")
+                    return True # Final destination of path segment reached
+                else:
+                    self.target_position = self.current_path[0]
+                    # print(f"DEBUG: Agent {self.id} reached waypoint by moving. Next waypoint: {self.target_position}")
+                    return True # Waypoint reached
             else:
                 self.position += potential_movement
-        return False
+        
+        return False # Waypoint not yet reached
 
     def _move_randomly(self, dt: float):
-        """Moves the agent randomly within the grid bounds."""
-        if self.target_position is None:
+        """Moves the agent randomly. If a path is set, it follows it. Otherwise, picks a new random target."""
+        if not self.current_path and self.state == AgentState.MOVING_RANDOMLY: # Only pick new random if no path and in this state
             if self.grid.width_in_cells > 0 and self.grid.height_in_cells > 0: # type: ignore
-                # Pick a new random target
-                self.target_position = pygame.math.Vector2(
+                random_target_pos = pygame.math.Vector2(
                     random.uniform(0, self.grid.width_in_cells - 1), # type: ignore
                     random.uniform(0, self.grid.height_in_cells - 1) # type: ignore
                 )
-                self.target_position.x = max(0, min(self.target_position.x, self.grid.width_in_cells - 1)) # type: ignore
-                self.target_position.y = max(0, min(self.target_position.y, self.grid.height_in_cells - 1)) # type: ignore
-            else:
+                # Ensure it's int for grid purposes
+                random_target_pos.x = int(round(max(0, min(random_target_pos.x, self.grid.width_in_cells - 1)))) # type: ignore
+                random_target_pos.y = int(round(max(0, min(random_target_pos.y, self.grid.height_in_cells - 1)))) # type: ignore
+                
+                print(f"DEBUG: Agent {self.id} moving randomly, new target: {random_target_pos}")
+                self.set_target(random_target_pos) # This will calculate path
+                if not self.current_path: # Path calculation failed
+                    self.set_objective_idle() # Become idle if can't path to random spot
+                    return
+            else: # Grid not valid
                 self.set_objective_idle()
                 return
 
-        if self.move_towards_current_target(dt):
-            self.set_objective_idle()
+        # Now, follow the path if one exists (either newly calculated or pre-existing for random move)
+        if self.current_path:
+            if self._follow_path(dt): # True if waypoint reached
+                if not self.current_path: # Path is now complete
+                    # print(f"DEBUG: Agent {self.id} completed random move path.")
+                    self.set_objective_idle() # Finished random move, become idle
+        elif self.state == AgentState.MOVING_RANDOMLY : # No path, but was supposed to be moving randomly
+             # This case might occur if path calculation failed initially and set_target didn't set a path
+             # print(f"DEBUG: Agent {self.id} in MOVING_RANDOMLY but no path. Becoming IDLE.")
+             self.set_objective_idle()
+
 
     def _evaluate_and_select_task(self, available_tasks: List['Task'], resource_manager: 'ResourceManager') -> Optional['Task']:
         """
@@ -451,10 +528,10 @@ class Agent:
 
         if self.current_inventory['quantity'] > 0 and self.current_inventory['resource_type'] is not None:
             carried_resource_type = self.current_inventory['resource_type']
-            resource_color = self.config.RESOURCE_VISUAL_COLORS.get(carried_resource_type, (128, 128, 128)) 
+            resource_color = self.config.RESOURCE_VISUAL_COLORS.get(carried_resource_type, (128, 128, 128))
 
             icon_radius = agent_radius // 2
-            icon_offset_y = -agent_radius - icon_radius // 2 
+            icon_offset_y = -agent_radius - icon_radius // 2
             icon_center_x = screen_pos[0]
             icon_center_y = screen_pos[1] + icon_offset_y
             
