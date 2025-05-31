@@ -1,6 +1,7 @@
 import pygame
 import time
 import random
+import logging # Added
 from typing import List, Optional, Any # Added for type hinting
 from pygame.math import Vector2 # Added for agent positions
 from src.core import config
@@ -30,12 +31,14 @@ class GameLoop:
         self.accumulator = 0.0
         self.dt = 1.0 / config.TARGET_FPS # Timestep duration
         self.show_task_panel = True # Added for toggling task panel visibility
+        self.logger = logging.getLogger(__name__) # Added
  
         # Initialize Grid
         try:
             self.grid = Grid()
+            self.logger.info("Grid initialized successfully.") # Added
         except ValueError as e:
-            print(f"FATAL: Grid initialization failed: {e}")
+            self.logger.critical(f"Grid initialization failed: {e}") # Changed
             # Consider how to handle this - maybe raise exception or exit?
             # For now, let's assume config is valid.
             raise # Re-raise the exception to stop execution if grid fails
@@ -45,8 +48,9 @@ class GameLoop:
         # Initialize font for resource display (ensure pygame.font.init() was called in main)
         try:
             self.resource_font = pygame.font.Font(None, config.RESOURCE_FONT_SIZE)
+            self.logger.info("Resource display font loaded.") # Added
         except Exception as e:
-            print(f"Warning: Could not load default font. Resource text might not display. Error: {e}")
+            self.logger.warning(f"Could not load default font for resource display. Error: {e}") # Changed
             # Create a fallback font object that might work or fail gracefully in draw
             self.resource_font = pygame.font.Font(pygame.font.get_default_font(), config.RESOURCE_FONT_SIZE)
 
@@ -78,8 +82,9 @@ class GameLoop:
         # Initialize UI Font and Task Display Panel
         try:
             self.ui_font = pygame.font.Font(None, 24) # General UI font, size can be from config
+            self.logger.info("UI font loaded.") # Added
         except Exception as e:
-            print(f"Warning: Could not load default font for UI. Error: {e}")
+            self.logger.warning(f"Could not load default font for UI. Error: {e}") # Changed
             self.ui_font = pygame.font.Font(pygame.font.get_default_font(), 24)
 
         panel_width = 350  # Width of the task panel
@@ -114,9 +119,9 @@ class GameLoop:
             if self.grid.is_area_free(gx, gy, entity_grid_width, entity_grid_height):
                 agent = self.agent_manager.create_agent(position=grid_position, speed=config.AGENT_SPEED) # Pass grid position
                 self.grid.update_occupancy(agent, gx, gy, entity_grid_width, entity_grid_height, is_placing=True)
-                print(f"  Spawned Agent at grid position {grid_position}") # DEBUG
+                self.logger.debug(f"Spawned Agent {agent.id} at grid position {grid_position}") # Changed
             else:
-                print(f"Warning: Could not spawn agent at {grid_position}, area occupied.")
+                self.logger.warning(f"Could not spawn agent at {grid_position}, area occupied.") # Changed
 
 
     def handle_input(self):
@@ -129,7 +134,7 @@ class GameLoop:
 
     def _spawn_initial_resources(self):
         """Creates and places the initial resource nodes, updating occupancy grid."""
-        print(f"Spawning {config.INITIAL_BERRY_BUSHES} berry bushes...") # DEBUG
+        self.logger.info(f"Spawning {config.INITIAL_BERRY_BUSHES} berry bushes...") # Changed
         spawn_margin = config.SCREEN_SPAWN_MARGIN # Avoid spawning too close to screen edges
         
         # BerryBushes are 1x1
@@ -153,18 +158,18 @@ class GameLoop:
                 bush = BerryBush(grid_position)
                 self.resource_manager.add_node(bush)
                 self.grid.update_occupancy(bush, gx, gy, entity_grid_width, entity_grid_height, is_placing=True)
-                print(f"DEBUG: Spawned BerryBush at grid_pos: {grid_position}")
+                self.logger.debug(f"Spawned BerryBush at grid_pos: {grid_position}") # Changed
                 spawned_bushes += 1
             # else: # Optional: log failed attempt
-                # print(f"DEBUG: Failed to spawn BerryBush at {grid_position}, area occupied. Attempt {attempts}")
+                # self.logger.debug(f"Failed to spawn BerryBush at {grid_position}, area occupied. Attempt {attempts}") # Changed
         if spawned_bushes < config.INITIAL_BERRY_BUSHES:
-            print(f"Warning: Could only spawn {spawned_bushes}/{config.INITIAL_BERRY_BUSHES} berry bushes after {max_attempts} attempts.")
+            self.logger.warning(f"Could only spawn {spawned_bushes}/{config.INITIAL_BERRY_BUSHES} berry bushes after {max_attempts} attempts.") # Changed
 
 
         # Spawn WheatFields
         num_wheat_fields = config.INITIAL_WHEAT_FIELD # Example number
         max_attempts_wheat = num_wheat_fields # Define max_attempts_wheat based on the loop iterations
-        print(f"Spawning {num_wheat_fields} wheat fields...")
+        self.logger.info(f"Spawning {num_wheat_fields} wheat fields...") # Changed
         for _ in range(num_wheat_fields):
             screen_pos_x = random.uniform(spawn_margin, config.SCREEN_WIDTH - spawn_margin)
             screen_pos_y = random.uniform(spawn_margin, config.SCREEN_HEIGHT - spawn_margin)
@@ -179,24 +184,24 @@ class GameLoop:
                 wheat_field = WheatField(grid_position)
                 self.resource_manager.add_node(wheat_field)
                 self.grid.update_occupancy(wheat_field, gx, gy, entity_grid_width, entity_grid_height, is_placing=True)
-                print(f"DEBUG: Spawned WheatField at grid_pos: {grid_position}")
+                self.logger.debug(f"Spawned WheatField at grid_pos: {grid_position}") # Changed
                 spawned_wheat_fields +=1
             # else: # Optional: log failed attempt
-                # print(f"DEBUG: Failed to spawn WheatField at {grid_position}, area occupied. Attempt {attempts_wheat}")
+                # self.logger.debug(f"Failed to spawn WheatField at {grid_position}, area occupied. Attempt {attempts_wheat}") # Changed
         
         if spawned_wheat_fields < num_wheat_fields:
-             print(f"Warning: Could only spawn {spawned_wheat_fields}/{num_wheat_fields} wheat fields after {max_attempts_wheat} attempts.")
+             self.logger.warning(f"Could only spawn {spawned_wheat_fields}/{num_wheat_fields} wheat fields after {max_attempts_wheat} attempts.") # Changed
 
 
         # Spawn Mills - New dynamic spawning logic
-        print(f"Attempting to spawn {config.DESIRED_NUM_MILLS} mills...")
+        self.logger.info(f"Attempting to spawn {config.DESIRED_NUM_MILLS} mills...") # Changed
         mill_width = Mill.GRID_WIDTH
         mill_height = Mill.GRID_HEIGHT
         
         available_mill_spots = self._find_available_spawn_points(mill_width, mill_height)
         
         if not available_mill_spots:
-            print(f"Warning: No available space found to spawn any mills of size {mill_width}x{mill_height}.")
+            self.logger.warning(f"No available space found to spawn any mills of size {mill_width}x{mill_height}.") # Changed
         else:
             random.shuffle(available_mill_spots) # Shuffle for random placement from available spots
             
@@ -209,13 +214,13 @@ class GameLoop:
                 mill = Mill(pos_vec) # Position is top-left grid coordinates
                 self.resource_manager.add_processing_station(mill)
                 self.grid.update_occupancy(mill, gx, gy, mill_width, mill_height, is_placing=True)
-                print(f"DEBUG: Spawned Mill (size {mill_width}x{mill_height}) at grid_pos: {pos_vec}")
+                self.logger.debug(f"Spawned Mill (size {mill_width}x{mill_height}) at grid_pos: {pos_vec}") # Changed
                 spawned_mills_count += 1
 
             if spawned_mills_count < config.DESIRED_NUM_MILLS and len(available_mill_spots) > 0 :
-                print(f"Warning: Successfully spawned {spawned_mills_count} out of {config.DESIRED_NUM_MILLS} desired mills due to limited available space.")
+                self.logger.warning(f"Successfully spawned {spawned_mills_count} out of {config.DESIRED_NUM_MILLS} desired mills due to limited available space.") # Changed
             elif spawned_mills_count > 0:
-                 print(f"Successfully spawned {spawned_mills_count} mills.")
+                 self.logger.info(f"Successfully spawned {spawned_mills_count} mills.") # Changed
             # If spawned_mills_count is 0 and available_mill_spots was empty, the initial warning covers it.
 
     def _spawn_initial_storage_points(self):
@@ -244,9 +249,9 @@ class GameLoop:
             )
             self.resource_manager.add_storage_point(berry_storage_point)
             self.grid.update_occupancy(berry_storage_point, sgx, sgy, entity_grid_width, entity_grid_height, is_placing=True)
-            print(f"DEBUG: Spawned StoragePoint at grid_pos: {storage_position_grid} for BERRY and WHEAT with capacity {capacity}")
+            self.logger.debug(f"Spawned StoragePoint at grid_pos: {storage_position_grid} for BERRY and WHEAT with capacity {capacity}") # Changed
         else:
-            print(f"Warning: Could not spawn BERRY/WHEAT StoragePoint at {storage_position_grid}, area occupied.")
+            self.logger.warning(f"Could not spawn BERRY/WHEAT StoragePoint at {storage_position_grid}, area occupied.") # Changed
 
 
         # Spawn StoragePoint for Flour Powder
@@ -270,9 +275,9 @@ class GameLoop:
             )
             self.resource_manager.add_storage_point(flour_storage_point)
             self.grid.update_occupancy(flour_storage_point, fsgx, fsgy, entity_grid_width, entity_grid_height, is_placing=True)
-            print(f"DEBUG: Spawned StoragePoint at grid_pos: {flour_storage_position_grid} for FLOUR_POWDER with capacity {flour_storage_capacity}")
+            self.logger.debug(f"Spawned StoragePoint at grid_pos: {flour_storage_position_grid} for FLOUR_POWDER with capacity {flour_storage_capacity}") # Changed
         else:
-            print(f"Warning: Could not spawn FLOUR StoragePoint at {flour_storage_position_grid}, area occupied.")
+            self.logger.warning(f"Could not spawn FLOUR StoragePoint at {flour_storage_position_grid}, area occupied.") # Changed
 
     # Grid Occupancy Helper Functions are now part of the Grid class.
     # GameLoop will call self.grid.is_area_free() and self.grid.update_occupancy()
@@ -286,7 +291,7 @@ class GameLoop:
         if not hasattr(entity, 'position') or \
            not hasattr(entity, 'grid_width') or \
            not hasattr(entity, 'grid_height'):
-            print(f"Warning: Tried to remove entity {entity} from occupancy, but it's missing required attributes (position, grid_width, or grid_height).")
+            self.logger.warning(f"Tried to remove entity {entity} from occupancy, but it's missing required attributes (position, grid_width, or grid_height).") # Changed
             return
 
         start_x = int(entity.position.x)
@@ -296,7 +301,7 @@ class GameLoop:
         
         # Call grid's update_occupancy with is_placing=False
         self.grid.update_occupancy(entity, start_x, start_y, width, height, is_placing=False)
-        print(f"DEBUG: Cleared occupancy for entity {entity} at ({start_x},{start_y}) with size ({width}x{height}).")
+        self.logger.debug(f"Cleared occupancy for entity {entity} at ({start_x},{start_y}) with size ({width}x{height}).") # Changed
 
     def _find_available_spawn_points(self, entity_grid_width: int, entity_grid_height: int) -> List[Vector2]:
         """

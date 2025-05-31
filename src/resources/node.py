@@ -1,5 +1,6 @@
 import pygame
 import uuid # For task and agent IDs
+import logging # Added
 from typing import Optional # For Optional type hints
 from abc import ABC, abstractmethod
 from ..resources.resource_types import ResourceType # Import ResourceType
@@ -18,7 +19,9 @@ class ResourceNode(ABC):
             generation_interval: The interval at which resources are generated (in seconds).
             resource_type: The type of resource this node provides.
         """
+        self.logger = logging.getLogger(__name__) # Added
         if not isinstance(position, pygame.Vector2):
+            self.logger.critical("Position must be a pygame.Vector2") # Added
             raise TypeError("Position must be a pygame.Vector2")
         self.position = position
         self.capacity = int(capacity) # Ensure capacity is integer
@@ -57,9 +60,9 @@ class ResourceNode(ABC):
         if self.claimed_by_task_id is None:
             self.claimed_by_task_id = task_id
             self.claimed_by_agent_id = agent_id
-            # print(f"DEBUG: Node {self.position} claimed by task {task_id} for agent {agent_id}.")
+            self.logger.debug(f"Node {self.position} claimed by task {task_id} for agent {agent_id}.") # Changed
             return True
-        # print(f"DEBUG: Node {self.position} FAILED to claim by task {task_id} (already claimed by task {self.claimed_by_task_id}).")
+        self.logger.debug(f"Node {self.position} FAILED to claim by task {task_id} (already claimed by task {self.claimed_by_task_id}).") # Changed
         return False
 
     def release(self, agent_id: uuid.UUID, task_id: uuid.UUID):
@@ -71,9 +74,9 @@ class ResourceNode(ABC):
             # if self.claimed_by_agent_id == agent_id:
             self.claimed_by_task_id = None
             self.claimed_by_agent_id = None
-            # print(f"DEBUG: Node {self.position} released by task {task_id} from agent {agent_id}.")
-        # else:
-            # print(f"DEBUG: Node {self.position} release called by task {task_id} but was claimed by {self.claimed_by_task_id} (or not claimed).")
+            self.logger.debug(f"Node {self.position} released by task {task_id} from agent {agent_id}.") # Changed
+        else:
+            self.logger.debug(f"Node {self.position} release called by task {task_id} but was claimed by {self.claimed_by_task_id} (or not claimed).") # Changed
 
     @abstractmethod
     def draw(self, surface: pygame.Surface, font: pygame.font.Font, grid): # Added grid
@@ -105,5 +108,5 @@ class ResourceNode(ABC):
             self.current_quantity -= collectable_amount
             # Ensure resources don't go below zero (shouldn't happen with min logic)
             self.current_quantity = max(0.0, self.current_quantity)
-            print(f"Node at {self.position} ({self.resource_type.name}) collected {collectable_amount}, remaining: {self.current_quantity:.2f}") # Debug
+            self.logger.debug(f"Node at {self.position} ({self.resource_type.name}) collected {collectable_amount}, remaining: {self.current_quantity:.2f}") # Changed
         return collectable_amount

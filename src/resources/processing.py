@@ -1,4 +1,5 @@
 import pygame
+import logging # Added
 from typing import Optional
 from ..resources.resource_types import ResourceType
 from ..core import config # For potential future use, e.g. visual configuration
@@ -32,11 +33,13 @@ class ProcessingStation:
                               If 2 WHEAT makes 1 FLOUR, ratio = 0.5 (meaning 1 input makes 0.5 output, effectively needing 2 inputs for 1 output).
                               Let's stick to: 1 input unit produces `conversion_ratio` output units.
                               The plan for Mill implies 1 WHEAT -> 1 FLOUR_POWDER, so ratio = 1.0.
-            processing_speed: Number of simulation ticks required to complete one processing cycle.
-            input_capacity: Maximum amount of input resources the station can hold.
-            output_capacity: Maximum amount of output resources the station can hold.
-        """
+           processing_speed: Number of simulation ticks required to complete one processing cycle.
+           input_capacity: Maximum amount of input resources the station can hold.
+           output_capacity: Maximum amount of output resources the station can hold.
+       """
+        self.logger = logging.getLogger(__name__) # Added
         if not isinstance(position, pygame.Vector2):
+            self.logger.critical("Position must be a pygame.Vector2") # Added
             raise TypeError("Position must be a pygame.Vector2")
 
         self.position = position
@@ -66,9 +69,9 @@ class ProcessingStation:
             amount_to_add = min(float(quantity), self.input_capacity - self.current_input_quantity)
             if amount_to_add > 0:
                 self.current_input_quantity += amount_to_add
-                # print(f"{self} received {amount_to_add} of {resource_type.name}. Input: {self.current_input_quantity}") # Debug
+                self.logger.debug(f"{self} received {amount_to_add} of {resource_type.name}. Input: {self.current_input_quantity}") # Changed
                 return True
-        # print(f"{self} FAILED to receive {quantity} of {resource_type.name}. Input: {self.current_input_quantity}, Capacity: {self.input_capacity}, Accepted: {self.accepted_input_type.name}") # Debug
+        self.logger.debug(f"{self} FAILED to receive {quantity} of {resource_type.name}. Input: {self.current_input_quantity}, Capacity: {self.input_capacity}, Accepted: {self.accepted_input_type.name}") # Changed
         return False
 
     def tick(self):
@@ -94,7 +97,7 @@ class ProcessingStation:
                 
                 # If we couldn't produce the full amount due to output capacity,
                 # the input was still consumed. This implies a need for agents to clear output.
-                # print(f"{self} processed. Input: {self.current_input_quantity}, Output: {self.current_output_quantity}") # Debug
+                self.logger.debug(f"{self} processed. Input: {self.current_input_quantity}, Output: {self.current_output_quantity}") # Changed
 
                 if self.current_input_quantity < 1.0 or self.current_output_quantity >= self.output_capacity:
                     self.is_processing = False # Stop if no more input or output full
@@ -112,7 +115,7 @@ class ProcessingStation:
 
         if amount_to_dispense > 0:
             self.current_output_quantity -= float(amount_to_dispense)
-            # print(f"{self} dispensed {amount_to_dispense} of {self.produced_output_type.name}. Output: {self.current_output_quantity}") # Debug
+            self.logger.debug(f"{self} dispensed {amount_to_dispense} of {self.produced_output_type.name}. Output: {self.current_output_quantity}") # Changed
             return amount_to_dispense
         return 0
 
@@ -170,5 +173,5 @@ class ProcessingStation:
                 f"State: {self.get_visual_state()} ({self.processing_progress}/{self.processing_speed})")
 
     def __repr__(self):
-        return (f"{self.__class__.__name__}(position={self.position}, "
-                f"input_type={self.accepted_input_type.name}, output_type={self.produced_output_type.name})")
+       return (f"{self.__class__.__name__}(position={self.position}, "
+               f"input_type={self.accepted_input_type.name}, output_type={self.produced_output_type.name})")

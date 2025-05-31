@@ -1,4 +1,5 @@
 import pygame
+import logging # Added
 from typing import List, TYPE_CHECKING, Optional
 from .node import ResourceNode # Use relative import within the package
 from .resource_types import ResourceType # For get_nodes_by_type
@@ -22,6 +23,7 @@ class ResourceManager:
         self.nodes: List[ResourceNode] = []
         self.storage_points: List['StoragePoint'] = []
         self.processing_stations: List[ProcessingStation] = []
+        self.logger = logging.getLogger(__name__) # Added
 
     def add_node(self, node: ResourceNode):
         """
@@ -32,9 +34,10 @@ class ResourceManager:
         """
         if isinstance(node, ResourceNode):
             self.nodes.append(node)
+            self.logger.debug(f"Added resource node: {node.resource_type.name} at {node.position}") # Added
         else:
             # Simple error handling, could be more robust (e.g., logging)
-            print(f"Error: Attempted to add non-ResourceNode object to ResourceManager: {node}")
+            self.logger.error(f"Attempted to add non-ResourceNode object to ResourceManager: {node}") # Changed
 
     def add_storage_point(self, storage_point: 'StoragePoint'):
         """
@@ -46,9 +49,10 @@ class ResourceManager:
         # Can add type checking if StoragePoint is directly imported
         # from .storage_point import StoragePoint
         # if isinstance(storage_point, StoragePoint):
-        self.storage_points.append(storage_point)
+        self.storage_points.append(storage_point) # type: ignore
+        self.logger.debug(f"Added storage point at {storage_point.position} accepting {storage_point.accepted_resource_types}") # Added
         # else:
-        #     print(f"Error: Attempted to add non-StoragePoint object to ResourceManager: {storage_point}")
+        #     self.logger.error(f"Attempted to add non-StoragePoint object to ResourceManager: {storage_point}") # Changed
 
     def add_processing_station(self, station: ProcessingStation):
         """
@@ -59,8 +63,9 @@ class ResourceManager:
         """
         if isinstance(station, ProcessingStation):
             self.processing_stations.append(station)
+            self.logger.debug(f"Added processing station: {type(station).__name__} at {station.position}") # Added
         else:
-            print(f"Error: Attempted to add non-ProcessingStation object to ResourceManager: {station}")
+            self.logger.error(f"Attempted to add non-ProcessingStation object to ResourceManager: {station}") # Changed
 
     def get_nodes_by_type(self, resource_type: ResourceType) -> List[ResourceNode]:
         """

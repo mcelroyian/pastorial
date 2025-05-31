@@ -1,4 +1,5 @@
 import pygame
+import logging # Added
 from src.core import config
 from pygame.math import Vector2
 
@@ -8,6 +9,7 @@ class Grid:
     """
     def __init__(self):
         """Initializes the grid based on configuration."""
+        self.logger = logging.getLogger(__name__) # Added
         self.screen_width = config.SCREEN_WIDTH
         self.screen_height = config.SCREEN_HEIGHT
         self.cell_size = config.GRID_CELL_SIZE # Assuming square cells for now
@@ -16,6 +18,7 @@ class Grid:
         self.grid_color = config.GRID_COLOR
 
         if self.cell_width <= 0 or self.cell_height <= 0:
+            self.logger.critical("GRID_CELL_SIZE must be positive.") # Added
             raise ValueError("GRID_CELL_SIZE must be positive.")
 
         self.width_in_cells = self.screen_width // self.cell_width
@@ -26,7 +29,7 @@ class Grid:
             [0 for _ in range(self.width_in_cells)] for _ in range(self.height_in_cells)
         ]
 
-        print(f"Grid initialized: {self.width_in_cells}x{self.height_in_cells} cells of size {self.cell_size}x{self.cell_size}, occupancy grid created.") # Debug
+        self.logger.info(f"Grid initialized: {self.width_in_cells}x{self.height_in_cells} cells of size {self.cell_size}x{self.cell_size}, occupancy grid created.") # Changed
 
     def draw(self, surface: pygame.Surface):
         """Draws the grid lines on the given surface."""

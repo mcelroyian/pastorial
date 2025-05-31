@@ -2,6 +2,7 @@ import pygame
 import uuid # For agent ID
 from enum import Enum, auto
 import random
+import logging # Added
 from typing import List, Dict, Optional, TYPE_CHECKING, Any # Added Any
 import math # For math.inf
 
@@ -89,6 +90,7 @@ class Agent:
 
         self.gathering_timer: float = 0.0
         self.delivery_timer: float = 0.0
+        self.logger = logging.getLogger(__name__) # Added
 
     def set_target(self, final_destination: pygame.math.Vector2):
         """
@@ -103,7 +105,7 @@ class Agent:
         if current_grid_pos == final_grid_dest:
             self.current_path = [final_grid_dest] # Path is just the destination
             self.target_position = final_grid_dest # Already there or very close
-            print(f"DEBUG: Agent {self.id} set_target: Already at/near final destination {final_grid_dest}.")
+            self.logger.debug(f"Agent {self.id} set_target: Already at/near final destination {final_grid_dest}.") # Changed
             return
 
         self.current_path = find_path(current_grid_pos, final_grid_dest, self.grid) # type: ignore
@@ -115,7 +117,7 @@ class Agent:
             
             if not self.current_path: # Path might have become empty after pop
                 self.target_position = final_grid_dest # Essentially means we are at the destination
-                print(f"DEBUG: Agent {self.id} set_target: Path to {final_grid_dest} resulted in empty path after pop (likely at destination).")
+                self.logger.debug(f"Agent {self.id} set_target: Path to {final_grid_dest} resulted in empty path after pop (likely at destination).") # Changed
                 self.current_path = [final_grid_dest] # Ensure path isn't None
                 return
 
@@ -124,7 +126,7 @@ class Agent:
         else:
             self.target_position = None
             self.current_path = None # Ensure it's None if no path
-            print(f"Warning: Agent {self.id} could not find a path from {current_grid_pos} to {final_grid_dest}.")
+            self.logger.warning(f"Agent {self.id} could not find a path from {current_grid_pos} to {final_grid_dest}.") # Changed
             # Consider setting agent to IDLE or a "PATH_FAILED" state if path is None
             # For now, task execution will likely fail if agent can't reach target.
             # self.set_objective_idle() # Or a specific failure state
@@ -286,9 +288,10 @@ class Agent:
                 random_target_pos.x = int(round(max(0, min(random_target_pos.x, self.grid.width_in_cells - 1)))) # type: ignore
                 random_target_pos.y = int(round(max(0, min(random_target_pos.y, self.grid.height_in_cells - 1)))) # type: ignore
                 
-                print(f"DEBUG: Agent {self.id} moving randomly, new target: {random_target_pos}")
+                self.logger.debug(f"Agent {self.id} moving randomly, new target: {random_target_pos}") # Changed
                 self.set_target(random_target_pos) # This will calculate path
                 if not self.current_path: # Path calculation failed
+                    self.logger.warning(f"Agent {self.id} failed to find path for random move to {random_target_pos}. Becoming IDLE.") # Added
                     self.set_objective_idle() # Become idle if can't path to random spot
                     return
             else: # Grid not valid
@@ -320,21 +323,21 @@ class Agent:
             # --- GatherAndDeliverTask Evaluation ---
             if isinstance(task, GatherAndDeliverTask):
                 task_resource_type = task.resource_type_to_gather
-                print(f"DEBUG: Agent {self.id} evaluating GatherAndDeliverTask {task.task_id} for resource {task_resource_type.name}.")
+                self.logger.debug(f"Agent {self.id} evaluating GatherAndDeliverTask {task.task_id} for resource {task_resource_type.name}.") # Changed
 
                 # 1. Check Agent's Resource Priorities
                 if self.resource_priorities and task_resource_type not in self.resource_priorities:
-                    print(f"DEBUG: Agent {self.id}: Task {task.task_id} resource {task_resource_type.name} not in priorities. Skipping.")
+                    self.logger.debug(f"Agent {self.id}: Task {task.task_id} resource {task_resource_type.name} not in priorities. Skipping.") # Changed
                     continue
                 
                 # 2. Check Source Availability (ResourceNode)
                 if not resource_manager.has_available_sources(task_resource_type, min_quantity=1):
-                    print(f"DEBUG: Agent {self.id}: Task {task.task_id} - No available sources for {task_resource_type.name}. Skipping.")
+                    self.logger.debug(f"Agent {self.id}: Task {task.task_id} - No available sources for {task_resource_type.name}. Skipping.") # Changed
                     continue
                 
                 # 3. Check Dropoff Availability (StoragePoint)
                 if not resource_manager.has_available_dropoffs(task_resource_type, min_capacity=1): # min_capacity for reservation
-                    print(f"DEBUG: Agent {self.id}: Task {task.task_id} - No available dropoffs for {task_resource_type.name}. Skipping.")
+                    self.logger.debug(f"Agent {self.id}: Task {task.task_id} - No available dropoffs for {task_resource_type.name}. Skipping.") # Changed
                     continue
 
                 # 4. Check Agent Inventory Compatibility & Capacity
@@ -343,23 +346,23 @@ class Agent:
 
                 if current_inv_qty > 0 and current_inv_type != task_resource_type:
                     if (self.inventory_capacity - current_inv_qty) < 1 : # Needs to be able to carry at least 1 of the new type
-                        print(f"DEBUG: Agent {self.id}: Task {task.task_id} - Inventory has {current_inv_qty} of {current_inv_type}, not enough space for {task_resource_type.name}. Skipping.")
+                        self.logger.debug(f"Agent {self.id}: Task {task.task_id} - Inventory has {current_inv_qty} of {current_inv_type}, not enough space for {task_resource_type.name}. Skipping.") # Changed
                         continue
                 
                 if current_inv_qty == self.inventory_capacity and (current_inv_type != task_resource_type or task.quantity_to_gather > 0) :
-                    print(f"DEBUG: Agent {self.id}: Task {task.task_id} - Inventory full with {current_inv_type}, cannot take task for {task_resource_type.name}. Skipping.")
+                    self.logger.debug(f"Agent {self.id}: Task {task.task_id} - Inventory full with {current_inv_type}, cannot take task for {task_resource_type.name}. Skipping.") # Changed
                     continue
                 
-                print(f"DEBUG: Agent {self.id}: Task {task.task_id} ({task_resource_type.name}) PASSED GatherAndDeliver checks.")
+                self.logger.debug(f"Agent {self.id}: Task {task.task_id} ({task_resource_type.name}) PASSED GatherAndDeliver checks.") # Changed
                 candidate_tasks.append(task)
 
             # --- DeliverWheatToMillTask (TaskType.PROCESS_RESOURCE) Evaluation ---
             elif isinstance(task, DeliverWheatToMillTask): # Check for the specific class
-                print(f"DEBUG: Agent {self.id} evaluating DeliverWheatToMillTask {task.task_id} for resource {task.resource_to_retrieve.name}.")
+                self.logger.debug(f"Agent {self.id} evaluating DeliverWheatToMillTask {task.task_id} for resource {task.resource_to_retrieve.name}.") # Changed
 
                 # 1. Agent inventory must be empty for this specific task type as per plan
                 if self.current_inventory.get('quantity', 0) > 0:
-                    print(f"DEBUG: Agent {self.id}: Task {task.task_id} (DeliverWheatToMill) - Agent inventory not empty. Skipping.")
+                    self.logger.debug(f"Agent {self.id}: Task {task.task_id} (DeliverWheatToMill) - Agent inventory not empty. Skipping.") # Changed
                     continue
 
                 # 2. Check if Wheat is available in any StoragePoint
@@ -370,7 +373,7 @@ class Agent:
                         wheat_available_in_storage = True
                         break
                 if not wheat_available_in_storage:
-                    print(f"DEBUG: Agent {self.id}: Task {task.task_id} - No WHEAT found in any storage point. Skipping.")
+                    self.logger.debug(f"Agent {self.id}: Task {task.task_id} - No WHEAT found in any storage point. Skipping.") # Changed
                     continue
 
                 # 3. Check if a Mill is available and can accept Wheat
@@ -381,28 +384,28 @@ class Agent:
                         mill_available_and_accepts = True
                         break
                 if not mill_available_and_accepts:
-                    print(f"DEBUG: Agent {self.id}: Task {task.task_id} - No Mill available or accepting WHEAT. Skipping.")
+                    self.logger.debug(f"Agent {self.id}: Task {task.task_id} - No Mill available or accepting WHEAT. Skipping.") # Changed
                     continue
                 
-                print(f"DEBUG: Agent {self.id}: Task {task.task_id} ({task.resource_to_retrieve.name}) PASSED DeliverWheatToMill checks.")
+                self.logger.debug(f"Agent {self.id}: Task {task.task_id} ({task.resource_to_retrieve.name}) PASSED DeliverWheatToMill checks.") # Changed
                 candidate_tasks.append(task)
             
             else:
                 # Optionally handle other task types or log them
                 if task.task_type not in [TaskType.GATHER_AND_DELIVER, TaskType.PROCESS_RESOURCE]: # Check general task_type
-                     print(f"DEBUG: Agent {self.id} skipping unhandled task type {task.task_type.name} for task {task.task_id}.")
+                     self.logger.debug(f"Agent {self.id} skipping unhandled task type {task.task_type.name} for task {task.task_id}.") # Changed
                 # If it's PROCESS_RESOURCE but not DeliverWheatToMillTask, it's currently unhandled by agent eval
                 elif task.task_type == TaskType.PROCESS_RESOURCE and not isinstance(task, DeliverWheatToMillTask):
-                     print(f"DEBUG: Agent {self.id} skipping PROCESS_RESOURCE task {task.task_id} as it's not DeliverWheatToMillTask.")
+                     self.logger.debug(f"Agent {self.id} skipping PROCESS_RESOURCE task {task.task_id} as it's not DeliverWheatToMillTask.") # Changed
 
 
         if not candidate_tasks:
-            print(f"DEBUG: Agent {self.id} found NO suitable tasks after full evaluation of {len(available_tasks)} initial tasks.")
+            self.logger.debug(f"Agent {self.id} found NO suitable tasks after full evaluation of {len(available_tasks)} initial tasks.") # Changed
             return None
 
         candidate_tasks.sort(key=lambda t: t.priority, reverse=True)
         selected_task = candidate_tasks[0]
-        print(f"DEBUG: Agent {self.id} selected task {selected_task.task_id} ({selected_task.task_type.name}) P:{selected_task.priority} from {len(candidate_tasks)} candidates.")
+        self.logger.debug(f"Agent {self.id} selected task {selected_task.task_id} ({selected_task.task_type.name}) P:{selected_task.priority} from {len(candidate_tasks)} candidates.") # Changed
         return selected_task
 
 
@@ -430,7 +433,7 @@ class Agent:
         else:
             if self.state == AgentState.IDLE:
                 # Transition to evaluating tasks
-                print(f"DEBUG: Agent {self.id}: State IDLE, transitioning to EVALUATING_TASKS.")
+                self.logger.debug(f"Agent {self.id}: State IDLE, transitioning to EVALUATING_TASKS.") # Changed
                 self.set_objective_evaluating_tasks()
                 self._last_task_evaluation_time = current_time # Reset cooldown timer
             
@@ -438,25 +441,25 @@ class Agent:
                 # Agent is evaluating tasks, TaskManager handles this.
                 # Agent's own timers are not relevant here.
                 if current_time - self._last_task_evaluation_time >= self.task_evaluation_cooldown:
-                    print(f"DEBUG: Agent {self.id}: State EVALUATING_TASKS. Cooldown passed. Fetching tasks.")
+                    self.logger.debug(f"Agent {self.id}: State EVALUATING_TASKS. Cooldown passed. Fetching tasks.") # Changed
                     self._last_task_evaluation_time = current_time
                     available_tasks = self.task_manager_ref.get_available_tasks()
-                    print(f"DEBUG: Agent {self.id}: Found {len(available_tasks)} tasks on job board.")
+                    self.logger.debug(f"Agent {self.id}: Found {len(available_tasks)} tasks on job board.") # Changed
                     
                     if available_tasks:
                         chosen_task_obj = self._evaluate_and_select_task(available_tasks, resource_manager)
                         
                         if chosen_task_obj:
-                            print(f"DEBUG: Agent {self.id}: Evaluated and chose task {chosen_task_obj.task_id}. Attempting to claim.")
+                            self.logger.debug(f"Agent {self.id}: Evaluated and chose task {chosen_task_obj.task_id}. Attempting to claim.") # Changed
                             claimed_task = self.task_manager_ref.attempt_claim_task(chosen_task_obj.task_id, self)
                             if claimed_task:
-                                print(f"DEBUG: Agent {self.id}: Successfully CLAIMED task {claimed_task.task_id}. Preparing task.")
+                                self.logger.info(f"Agent {self.id}: Successfully CLAIMED task {claimed_task.task_id}. Preparing task.") # Changed to INFO
                                 self.current_task = claimed_task
                                 # Agent's state will be set by task.prepare()
                                 if not self.current_task.prepare(self, resource_manager):
                                     # Preparation failed, task will be reported as FAILED by prepare's cleanup
                                     # Agent becomes IDLE again to re-evaluate
-                                    print(f"DEBUG: Agent {self.id}: Task {self.current_task.task_id} PREPARATION FAILED. Reporting outcome and returning to IDLE.")
+                                    self.logger.warning(f"Agent {self.id}: Task {self.current_task.task_id} PREPARATION FAILED. Reporting outcome and returning to IDLE.") # Changed to WARNING
                                     # TaskManager's report_task_outcome will handle re-posting if applicable
                                     self.task_manager_ref.report_task_outcome(self.current_task, TaskStatus.FAILED, self)
                                     # Ensure task cleanup is called if prepare fails and doesn't reach agent's main loop for cleanup
@@ -465,22 +468,22 @@ class Agent:
                                     self.current_task = None
                                     self.set_objective_idle()
                                 else:
-                                    print(f"DEBUG: Agent {self.id}: Task {claimed_task.task_id} PREPARATION SUCCESSFUL. Agent state: {self.state}")
+                                    self.logger.info(f"Agent {self.id}: Task {claimed_task.task_id} PREPARATION SUCCESSFUL. Agent state: {self.state}") # Changed to INFO
 
                             else:
                                 # Failed to claim (e.g., another agent took it)
-                                print(f"DEBUG: Agent {self.id}: Failed to claim task {chosen_task_obj.task_id}. Re-evaluating (will become IDLE).")
+                                self.logger.info(f"Agent {self.id}: Failed to claim task {chosen_task_obj.task_id} (likely claimed by another agent). Re-evaluating.") # Changed to INFO
                                 self.set_objective_idle() # Re-evaluate on next suitable tick
                         else:
                             # No suitable task found by evaluation logic
-                            print(f"DEBUG: Agent {self.id}: No suitable tasks found after evaluation. Moving randomly.")
+                            self.logger.debug(f"Agent {self.id}: No suitable tasks found after evaluation. Moving randomly.") # Changed
                             self.set_objective_move_randomly()
                     else:
                         # No tasks on the job board
-                        print(f"DEBUG: Agent {self.id}: No tasks available on job board. Moving randomly.")
+                        self.logger.debug(f"Agent {self.id}: No tasks available on job board. Moving randomly.") # Changed
                         self.set_objective_move_randomly()
                 # else:
-                    # print(f"DEBUG: Agent {self.id}: State EVALUATING_TASKS. Cooldown NOT passed. Waiting. Current: {current_time:.2f}, LastEval: {self._last_task_evaluation_time:.2f}, Cooldown: {self.task_evaluation_cooldown:.2f}")
+                    # self.logger.debug(f"Agent {self.id}: State EVALUATING_TASKS. Cooldown NOT passed. Waiting. Current: {current_time:.2f}, LastEval: {self._last_task_evaluation_time:.2f}, Cooldown: {self.task_evaluation_cooldown:.2f}") # Changed
 
             
             elif self.state == AgentState.MOVING_RANDOMLY:

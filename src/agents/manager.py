@@ -1,5 +1,6 @@
 import pygame
 import uuid # For generating agent IDs
+import logging # Added
 from typing import List, TYPE_CHECKING, Any, Optional # Added Any, Optional
 from .agent import Agent # Relative import from the same package
 from ..resources.resource_types import ResourceType
@@ -23,6 +24,7 @@ class AgentManager:
         self.grid = grid # Store the grid object
         self.task_manager_ref: 'TaskManager' = task_manager # Store task_manager reference
         # self.occupancy_grid = occupancy_grid # Removed
+        self.logger = logging.getLogger(__name__) # Added
 
     def add_agent(self, agent: Agent):
         """Adds an existing Agent instance to the manager."""
@@ -62,7 +64,7 @@ class AgentManager:
             resource_priorities=resource_priorities
         )
         self.add_agent(new_agent)
-        print(f"Created agent {agent_id} at {position}") # Debug
+        self.logger.info(f"Created agent {agent_id} at {position}") # Changed
         return new_agent
 
     def update_agents(self, dt: float, resource_manager): # resource_manager type hint can be added

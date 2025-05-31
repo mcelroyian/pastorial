@@ -1,5 +1,6 @@
 import uuid
 import time
+import logging # Added
 from typing import List, Dict, Optional, TYPE_CHECKING
 
 from .task import Task, GatherAndDeliverTask, DeliverWheatToMillTask # Added DeliverWheatToMillTask
@@ -25,6 +26,7 @@ class TaskManager:
         
         self.resource_manager_ref: 'ResourceManager' = resource_manager
         self.agent_manager_ref: 'AgentManager' = agent_manager
+        self.logger = logging.getLogger(__name__) # Added
         
         self._next_task_check_time: float = time.time()
         self._task_generation_interval: float = 5.0 # How often to check for new task generation
@@ -34,7 +36,7 @@ class TaskManager:
         # Higher priority number means more important
         self.pending_tasks.append(task)
         self.pending_tasks.sort(key=lambda t: t.priority, reverse=True)
-        print(f"DEBUG: TaskManager: Added new task {task.task_id} ({task.task_type.name}) P:{task.priority} to job board. Board size: {len(self.pending_tasks)}")
+        self.logger.debug(f"TaskManager: Added new task {task.task_id} ({task.task_type.name}) P:{task.priority} to job board. Board size: {len(self.pending_tasks)}") # Changed
 
     def create_gather_task(self,
                            resource_type: ResourceType,
@@ -77,7 +79,7 @@ class TaskManager:
             # otherwise task.prepare() will find them.
         )
         self.add_task(task)
-        print(f"DEBUG: TaskManager: Created DeliverWheatToMillTask {task.task_id} for {quantity} WHEAT, P:{priority}.")
+        self.logger.debug(f"TaskManager: Created DeliverWheatToMillTask {task.task_id} for {quantity} WHEAT, P:{priority}.") # Changed
         return task
 
     # def request_task_for_agent(self, agent: 'Agent') -> Optional[Task]:
@@ -119,10 +121,10 @@ class TaskManager:
             task_to_claim.agent_id = agent.id
             task_to_claim.status = TaskStatus.ASSIGNED # Or PREPARING if prepare is called immediately
             self.assigned_tasks[agent.id] = task_to_claim
-            print(f"TaskManager: Task {task_to_claim.task_id} ({task_to_claim.task_type.name}) CLAIMED by agent {agent.id}. Pending: {len(self.pending_tasks)}, Assigned: {len(self.assigned_tasks)}")
+            self.logger.info(f"TaskManager: Task {task_to_claim.task_id} ({task_to_claim.task_type.name}) CLAIMED by agent {agent.id}. Pending: {len(self.pending_tasks)}, Assigned: {len(self.assigned_tasks)}") # Changed
             return task_to_claim
         else:
-            print(f"TaskManager: Agent {agent.id} FAILED to claim task {task_id}. Task not found or already claimed.")
+            self.logger.warning(f"TaskManager: Agent {agent.id} FAILED to claim task {task_id}. Task not found or already claimed.") # Changed
             return None
 
     def report_task_outcome(self, task: Task, final_status: TaskStatus, agent: 'Agent'):
@@ -135,18 +137,18 @@ class TaskManager:
         if agent.id in self.assigned_tasks and self.assigned_tasks[agent.id].task_id == task.task_id:
             del self.assigned_tasks[agent.id]
         else:
-            print(f"Warning: TaskManager received outcome for task {task.task_id} from agent {agent.id}, but it was not in assigned_tasks or mismatch.")
+            self.logger.warning(f"TaskManager received outcome for task {task.task_id} from agent {agent.id}, but it was not in assigned_tasks or mismatch.") # Changed
 
         if final_status == TaskStatus.COMPLETED:
             self.completed_tasks.append(task)
-            print(f"TaskManager: Task {task.task_id} COMPLETED by agent {agent.id}. Completed: {len(self.completed_tasks)}")
+            self.logger.info(f"TaskManager: Task {task.task_id} COMPLETED by agent {agent.id}. Completed: {len(self.completed_tasks)}") # Changed
         elif final_status == TaskStatus.FAILED:
             self.failed_tasks.append(task) # Keep a record of failed tasks
-            print(f"TaskManager: Task {task.task_id} FAILED for agent {agent.id}. Reason: {task.error_message}. Failed list size: {len(self.failed_tasks)}")
+            self.logger.warning(f"TaskManager: Task {task.task_id} FAILED for agent {agent.id}. Reason: {task.error_message}. Failed list size: {len(self.failed_tasks)}") # Changed
             
             # Re-post task to job board (simple re-posting for now)
             # TODO: Add more sophisticated logic for re-posting (e.g., delay, modification, max retries)
-            print(f"DEBUG: TaskManager: Re-posting task {task.task_id} ({task.task_type.name}) to job board due to FAILED status.")
+            self.logger.info(f"TaskManager: Re-posting task {task.task_id} ({task.task_type.name}) to job board due to FAILED status.") # Changed
             task.status = TaskStatus.PENDING # Reset status
             task.agent_id = None # Unassign agent
             # task.error_message = None # Optionally clear error message or append to a list of errors
@@ -157,7 +159,7 @@ class TaskManager:
             # For now, treat like failed for tracking, or add a cancelled_tasks list.
             # Depending on policy, cancelled tasks might also be re-posted or archived.
             self.failed_tasks.append(task) # Or a self.cancelled_tasks list
-            print(f"TaskManager: Task {task.task_id} CANCELLED for agent {agent.id}. Added to failed/cancelled list.")
+            self.logger.info(f"TaskManager: Task {task.task_id} CANCELLED for agent {agent.id}. Added to failed/cancelled list.") # Changed
 
 
     def update(self, dt: float):
@@ -169,11 +171,11 @@ class TaskManager:
         """
         current_time = time.time()
         if current_time >= self._next_task_check_time:
-            print(f"DEBUG: TaskManager: Update - time to check for task generation. Current time: {current_time:.2f}, Next check: {self._next_task_check_time:.2f}")
+            self.logger.debug(f"TaskManager: Update - time to check for task generation. Current time: {current_time:.2f}, Next check: {self._next_task_check_time:.2f}") # Changed
             self._generate_tasks_if_needed()
             self._next_task_check_time = current_time + self._task_generation_interval
         # else:
-            # print(f"DEBUG: TaskManager: Update - NOT time to check for task generation. Current time: {current_time:.2f}, Next check: {self._next_task_check_time:.2f}")
+            # self.logger.debug(f"TaskManager: Update - NOT time to check for task generation. Current time: {current_time:.2f}, Next check: {self._next_task_check_time:.2f}") # Changed
 
 
         # TODO: Check for tasks that are assigned but stuck (e.g., agent died, task timed out)
@@ -200,24 +202,24 @@ class TaskManager:
                 if isinstance(task, GatherAndDeliverTask) and task.resource_type_to_gather == ResourceType.BERRY
             )
 
-            # print(f"DEBUG TaskManager: Active berry gather tasks: {active_berry_gather_tasks}, Max Allowed: {config.MAX_ACTIVE_BERRY_GATHER_TASKS}") # Debug
+            # self.logger.debug(f"TaskManager: Active berry gather tasks: {active_berry_gather_tasks}, Max Allowed: {config.MAX_ACTIVE_BERRY_GATHER_TASKS}") # Changed
 
             if active_berry_gather_tasks < config.MAX_ACTIVE_BERRY_GATHER_TASKS:
-                print(f"DEBUG: TaskManager: Low Berry Stock ({current_berry_stock} < {config.MIN_BERRY_STOCK_LEVEL}). Generating new GatherAndDeliverTask for BERRY.")
+                self.logger.info(f"TaskManager: Low Berry Stock ({current_berry_stock} < {config.MIN_BERRY_STOCK_LEVEL}). Generating new GatherAndDeliverTask for BERRY.") # Changed
                 self.create_gather_task(
                     resource_type=ResourceType.BERRY,
                     quantity=config.BERRY_GATHER_TASK_QUANTITY,
                     priority=config.BERRY_GATHER_TASK_PRIORITY
                 )
             else:
-                print(f"DEBUG: TaskManager: Berry stock low ({current_berry_stock}), but max active berry tasks ({active_berry_gather_tasks}/{config.MAX_ACTIVE_BERRY_GATHER_TASKS}) reached. No new BERRY task.")
+                self.logger.debug(f"TaskManager: Berry stock low ({current_berry_stock}), but max active berry tasks ({active_berry_gather_tasks}/{config.MAX_ACTIVE_BERRY_GATHER_TASKS}) reached. No new BERRY task.") # Changed
         # else:
-            # print(f"DEBUG TaskManager: Berry stock ({current_berry_stock}) is sufficient. No new berry task needed.") # Debug
+            # self.logger.debug(f"TaskManager: Berry stock ({current_berry_stock}) is sufficient. No new berry task needed.") # Changed
 
 # --- Wheat Task Generation ---
         current_wheat_stock = self.resource_manager_ref.get_global_resource_quantity(ResourceType.WHEAT)
         
-        # print(f"DEBUG TaskManager: Current global wheat stock: {current_wheat_stock}, Min Level: {config.MIN_WHEAT_STOCK_LEVEL}") # Debug
+        # self.logger.debug(f"TaskManager: Current global wheat stock: {current_wheat_stock}, Min Level: {config.MIN_WHEAT_STOCK_LEVEL}") # Changed
 
         if current_wheat_stock < config.MIN_WHEAT_STOCK_LEVEL:
             active_wheat_gather_tasks = sum(
@@ -229,72 +231,72 @@ class TaskManager:
                 if isinstance(task, GatherAndDeliverTask) and task.resource_type_to_gather == ResourceType.WHEAT
             )
 
-            # print(f"DEBUG TaskManager: Active wheat gather tasks: {active_wheat_gather_tasks}, Max Allowed: {config.MAX_ACTIVE_WHEAT_GATHER_TASKS}") # Debug
+            # self.logger.debug(f"TaskManager: Active wheat gather tasks: {active_wheat_gather_tasks}, Max Allowed: {config.MAX_ACTIVE_WHEAT_GATHER_TASKS}") # Changed
 
             if active_wheat_gather_tasks < config.MAX_ACTIVE_WHEAT_GATHER_TASKS:
-                print(f"DEBUG: TaskManager: Low Wheat Stock ({current_wheat_stock} < {config.MIN_WHEAT_STOCK_LEVEL}). Generating new GatherAndDeliverTask for WHEAT.")
+                self.logger.info(f"TaskManager: Low Wheat Stock ({current_wheat_stock} < {config.MIN_WHEAT_STOCK_LEVEL}). Generating new GatherAndDeliverTask for WHEAT.") # Changed
                 self.create_gather_task(
                     resource_type=ResourceType.WHEAT,
                     quantity=config.WHEAT_GATHER_TASK_QUANTITY,
                     priority=config.WHEAT_GATHER_TASK_PRIORITY
                 )
             else:
-                print(f"DEBUG: TaskManager: Wheat stock low ({current_wheat_stock}), but max active wheat tasks ({active_wheat_gather_tasks}/{config.MAX_ACTIVE_WHEAT_GATHER_TASKS}) reached. No new WHEAT task.")
+                self.logger.debug(f"TaskManager: Wheat stock low ({current_wheat_stock}), but max active wheat tasks ({active_wheat_gather_tasks}/{config.MAX_ACTIVE_WHEAT_GATHER_TASKS}) reached. No new WHEAT task.") # Changed
         # else:
-            # print(f"DEBUG TaskManager: Wheat stock ({current_wheat_stock}) is sufficient. No new wheat task needed.") # Debug
+            # self.logger.debug(f"TaskManager: Wheat stock ({current_wheat_stock}) is sufficient. No new wheat task needed.") # Changed
 
         # --- Flour (from Wheat) Task Generation ---
         # This task involves an agent picking up Wheat from storage and delivering it to a Mill.
         min_flour_stock_config = getattr(config, 'MIN_FLOUR_STOCK_LEVEL', 20)
         current_flour_stock = self.resource_manager_ref.get_global_resource_quantity(ResourceType.FLOUR_POWDER)
-        print(f"DEBUG_FLOUR_TASK: Current Flour: {current_flour_stock}, Min Required: {min_flour_stock_config}")
+        self.logger.debug(f"FLOUR_TASK: Current Flour: {current_flour_stock}, Min Required: {min_flour_stock_config}") # Changed
 
         if current_flour_stock < min_flour_stock_config:
-            print(f"DEBUG_FLOUR_TASK: Flour stock is LOW ({current_flour_stock} < {min_flour_stock_config}). Proceeding with checks.")
+            self.logger.debug(f"FLOUR_TASK: Flour stock is LOW ({current_flour_stock} < {min_flour_stock_config}). Proceeding with checks.") # Changed
             
             process_wheat_qty_config = getattr(config, 'PROCESS_WHEAT_TASK_QUANTITY', 10)
             wheat_in_storage = self.resource_manager_ref.get_global_resource_quantity(ResourceType.WHEAT)
-            print(f"DEBUG_FLOUR_TASK: Wheat in storage: {wheat_in_storage}, Required for task: {process_wheat_qty_config}")
+            self.logger.debug(f"FLOUR_TASK: Wheat in storage: {wheat_in_storage}, Required for task: {process_wheat_qty_config}") # Changed
             
             mill_can_accept = False
-            print(f"DEBUG_FLOUR_TASK: Checking Mills... Total stations: {len(self.resource_manager_ref.processing_stations)}")
+            self.logger.debug(f"FLOUR_TASK: Checking Mills... Total stations: {len(self.resource_manager_ref.processing_stations)}") # Changed
             for i, station in enumerate(self.resource_manager_ref.processing_stations):
                 is_mill_instance = isinstance(station, Mill)
                 can_accept_input = False
                 if is_mill_instance:
-                    can_accept_input = station.can_accept_input(ResourceType.WHEAT, 1)
-                print(f"DEBUG_FLOUR_TASK: Station {i}: Type={type(station).__name__}, IsMill={is_mill_instance}, CanAcceptWheat={can_accept_input}, Pos={station.position if hasattr(station, 'position') else 'N/A'}")
+                    can_accept_input = station.can_accept_input(ResourceType.WHEAT, 1) # type: ignore
+                self.logger.debug(f"FLOUR_TASK: Station {i}: Type={type(station).__name__}, IsMill={is_mill_instance}, CanAcceptWheat={can_accept_input}, Pos={station.position if hasattr(station, 'position') else 'N/A'}") # Changed
                 if is_mill_instance and can_accept_input:
                     mill_can_accept = True
-                    print(f"DEBUG_FLOUR_TASK: Found suitable Mill: {station.position}")
+                    self.logger.debug(f"FLOUR_TASK: Found suitable Mill: {station.position}") # Changed
                     break
-            print(f"DEBUG_FLOUR_TASK: Mill can accept WHEAT: {mill_can_accept}")
+            self.logger.debug(f"FLOUR_TASK: Mill can accept WHEAT: {mill_can_accept}") # Changed
             
             if wheat_in_storage >= process_wheat_qty_config and mill_can_accept:
-                print(f"DEBUG_FLOUR_TASK: Wheat available ({wheat_in_storage} >= {process_wheat_qty_config}) AND Mill can accept. Checking active tasks...")
+                self.logger.debug(f"FLOUR_TASK: Wheat available ({wheat_in_storage} >= {process_wheat_qty_config}) AND Mill can accept. Checking active tasks...") # Changed
                 active_process_wheat_tasks = sum(
                     1 for task in self.pending_tasks + list(self.assigned_tasks.values())
                     if isinstance(task, DeliverWheatToMillTask)
                 )
                 max_active_config = getattr(config, 'MAX_ACTIVE_PROCESS_WHEAT_TASKS', 2)
-                print(f"DEBUG_FLOUR_TASK: Active DeliverWheatToMill tasks: {active_process_wheat_tasks}, Max Allowed: {max_active_config}")
+                self.logger.debug(f"FLOUR_TASK: Active DeliverWheatToMill tasks: {active_process_wheat_tasks}, Max Allowed: {max_active_config}") # Changed
 
                 if active_process_wheat_tasks < max_active_config:
-                    print(f"DEBUG_FLOUR_TASK: All conditions met. Generating new DeliverWheatToMillTask.")
+                    self.logger.info(f"FLOUR_TASK: All conditions met. Generating new DeliverWheatToMillTask.") # Changed
                     self.create_deliver_wheat_to_mill_task(
                         quantity=process_wheat_qty_config,
                         priority=getattr(config, 'PROCESS_WHEAT_TASK_PRIORITY', 75)
                     )
                 else:
-                    print(f"DEBUG_FLOUR_TASK: Max active DeliverWheatToMill tasks ({active_process_wheat_tasks}/{max_active_config}) reached. No new task.")
+                    self.logger.debug(f"FLOUR_TASK: Max active DeliverWheatToMill tasks ({active_process_wheat_tasks}/{max_active_config}) reached. No new task.") # Changed
             else:
-                print(f"DEBUG_FLOUR_TASK: Conditions not met for task creation:")
+                self.logger.debug(f"FLOUR_TASK: Conditions not met for task creation:") # Changed
                 if not (wheat_in_storage >= process_wheat_qty_config):
-                    print(f"DEBUG_FLOUR_TASK: -> Not enough WHEAT in storage ({wheat_in_storage} < {process_wheat_qty_config}).")
+                    self.logger.debug(f"FLOUR_TASK: -> Not enough WHEAT in storage ({wheat_in_storage} < {process_wheat_qty_config}).") # Changed
                 if not mill_can_accept:
-                    print(f"DEBUG_FLOUR_TASK: -> No Mill can accept WHEAT currently.")
+                    self.logger.debug(f"FLOUR_TASK: -> No Mill can accept WHEAT currently.") # Changed
         else:
-            print(f"DEBUG_FLOUR_TASK: Flour stock ({current_flour_stock}) is sufficient (>= {min_flour_stock_config}). No new DeliverWheatToMill task needed.")
+            self.logger.debug(f"FLOUR_TASK: Flour stock ({current_flour_stock}) is sufficient (>= {min_flour_stock_config}). No new DeliverWheatToMill task needed.") # Changed
 
         # TODO: Future: Add logic for other resource types here, following a similar pattern.
 
