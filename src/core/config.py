@@ -12,6 +12,8 @@ TARGET_FPS = 60
 
 # Grid settings
 GRID_CELL_SIZE = 32
+GRID_WIDTH = SCREEN_WIDTH // GRID_CELL_SIZE
+GRID_HEIGHT = SCREEN_HEIGHT // GRID_CELL_SIZE
 GRID_COLOR = (50, 50, 50)  # Dark grey
 
 # Colors
@@ -26,6 +28,7 @@ BERRY_BUSH_CAPACITY = 23
 BERRY_BUSH_GENERATION_INTERVAL = 6 # Resources per second
 INITIAL_BERRY_BUSHES = 15
 INITIAL_WHEAT_FIELD = 15
+DESIRED_NUM_MILLS = 2 # Default desired number of mills
 
 WHEAT_GENERATION_INTERVAL = 12 # How many simulation ticks to generate 1 unit of wheat
 WHEAT_FIELD_CAPACITY = 11 # Max wheat in a field

@@ -2,7 +2,7 @@ import pygame
 import uuid # For agent ID
 from enum import Enum, auto
 import random
-from typing import List, Dict, Optional, TYPE_CHECKING
+from typing import List, Dict, Optional, TYPE_CHECKING, Any # Added Any
 import math # For math.inf
 
 from ..resources.resource_types import ResourceType
@@ -39,7 +39,8 @@ class Agent:
                  position: pygame.math.Vector2,
                  speed: float,
                  grid, # 'Grid' type hint
-                 task_manager: 'TaskManager', 
+                 task_manager: 'TaskManager',
+                 occupancy_grid: List[List[Optional[Any]]], # Added occupancy_grid
                  inventory_capacity: int,
                  resource_priorities: Optional[List[ResourceType]] = None):
         """
@@ -50,6 +51,7 @@ class Agent:
             speed (float): The movement speed of the agent (grid units per second).
             grid (Grid): The simulation grid object.
             task_manager (TaskManager): Reference to the global task manager.
+            occupancy_grid (List[List[Optional[Any]]]): The game's occupancy grid.
             inventory_capacity (int): Maximum number of resource units the agent can carry.
             resource_priorities (Optional[List[ResourceType]]): Ordered list of resource types the agent prefers.
                                                                Might be used by TaskManager.
@@ -59,7 +61,8 @@ class Agent:
         self.speed = speed
         self.grid = grid # type: ignore
         self.task_manager_ref: 'TaskManager' = task_manager
-        self.config = config 
+        self.occupancy_grid = occupancy_grid # Store the occupancy_grid
+        self.config = config
 
         self.state = AgentState.IDLE
         self.target_position: Optional[pygame.math.Vector2] = None # Set by tasks
@@ -179,13 +182,34 @@ class Agent:
             return True
         elif distance > 0:
             normalized_direction = direction.normalize()
-            movement = normalized_direction * self.speed * dt
-            if movement.length() >= distance:
+            potential_movement = normalized_direction * self.speed * dt
+            
+            # Calculate the potential next grid cell
+            # This is a simplified check for the immediate next step.
+            # A proper pathfinder (A*) would be needed for complex obstacle avoidance.
+            if potential_movement.length_squared() > 0: # Only check if there's actual movement
+                next_pos_check = self.position + normalized_direction * self.grid.cell_width # Check one cell in direction
+                next_grid_x = int(round(next_pos_check.x))
+                next_grid_y = int(round(next_pos_check.y))
+
+                # Check if the next grid cell is within bounds and free
+                if 0 <= next_grid_x < config.GRID_WIDTH and \
+                   0 <= next_grid_y < config.GRID_HEIGHT:
+                    # Allow moving into the target cell even if occupied (e.g. target is an entity)
+                    is_target_cell = (next_grid_x == int(round(self.target_position.x)) and \
+                                      next_grid_y == int(round(self.target_position.y)))
+                    
+                    if not is_target_cell and self.occupancy_grid[next_grid_y][next_grid_x] is not None:
+                        # print(f"DEBUG: Agent {self.id} at {self.position} sees obstacle at ({next_grid_x},{next_grid_y}) towards {self.target_position}. Halting.")
+                        return False # Blocked by an obstacle that is not the target cell
+
+            # Proceed with movement if not blocked or if it's the target cell
+            if potential_movement.length() >= distance:
                 self.position = pygame.math.Vector2(self.target_position)
                 self.target_position = None
                 return True
             else:
-                self.position += movement
+                self.position += potential_movement
         return False
 
     def _move_randomly(self, dt: float):

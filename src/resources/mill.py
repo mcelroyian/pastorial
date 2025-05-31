@@ -20,6 +20,9 @@ class Mill(ProcessingStation):
     # They were (139, 69, 19) and (160, 82, 45) respectively.
     # self.color and self.processing_color are set in __init__ but won't affect the new draw method's main graphics.
 
+    GRID_WIDTH = 4
+    GRID_HEIGHT = 4
+
     def __init__(self, position: pygame.Vector2):
         """
         Initializes a Mill.
@@ -36,6 +39,10 @@ class Mill(ProcessingStation):
             input_capacity=25,
             output_capacity=25
         )
+        self.grid_width = Mill.GRID_WIDTH
+        self.grid_height = Mill.GRID_HEIGHT
+        # self.position (from super class) will represent the top-left cell of the 4x4 area.
+
         # self.color and self.processing_color are initialized by the ProcessingStation base class.
         # The Mill's custom draw method uses MILL_SVG_* constants for its appearance,
         # so we don't need to override self.color and self.processing_color here
@@ -49,9 +56,17 @@ class Mill(ProcessingStation):
         cell_x_start = self.position.x * config.GRID_CELL_SIZE
         cell_y_start = self.position.y * config.GRID_CELL_SIZE
         
-        # SVG viewBox is 200x200, scale to GRID_CELL_SIZE
+        # SVG viewBox is 200x200
         svg_viewbox_size = 200.0
-        scale_factor = config.GRID_CELL_SIZE / svg_viewbox_size
+        
+        # Scale to the new larger area of the mill
+        target_render_width_pixels = self.grid_width * config.GRID_CELL_SIZE
+        # Assuming square cells and scaling to width for simplicity, as per plan
+        scale_factor = target_render_width_pixels / svg_viewbox_size
+        
+        # If maintaining aspect ratio based on height was desired:
+        # target_render_height_pixels = self.grid_height * config.GRID_CELL_SIZE
+        # scale_factor = min(target_render_width_pixels / svg_viewbox_size, target_render_height_pixels / svg_viewbox_size)
 
         # Helper to scale and offset coordinates
         def s(value): # scale
@@ -106,9 +121,15 @@ class Mill(ProcessingStation):
             pygame.draw.line(surface, MILL_SVG_BLADE_COLOR, (blade_start_x, blade_start_y), (end_x, end_y), blade_stroke_w)
 
         # --- Text Overlays (copied and adapted from ProcessingStation.draw) ---
-        station_rect = pygame.Rect(cell_x_start, cell_y_start, config.GRID_CELL_SIZE, config.GRID_CELL_SIZE)
-
-        # Display input: "I:type qty/cap"
+            # station_rect now covers the entire 4x4 visual area of the mill
+            station_rect = pygame.Rect(
+                cell_x_start,
+                cell_y_start,
+                self.grid_width * config.GRID_CELL_SIZE,
+                self.grid_height * config.GRID_CELL_SIZE
+            )
+    
+            # Display input: "I:type qty/cap"
         input_text_str = f"I:{self.accepted_input_type.name[0]}:{int(self.current_input_quantity)}/{self.input_capacity}"
         input_surface = font.render(input_text_str, True, config.DEBUG_TEXT_COLOR)
         input_rect = input_surface.get_rect(midtop=station_rect.midtop)

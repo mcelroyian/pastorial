@@ -1,6 +1,7 @@
 import pygame
 import time
 import random
+from typing import List, Optional, Any # Added for type hinting
 from pygame.math import Vector2 # Added for agent positions
 from src.core import config
 from src.input import handlers as input_handlers
@@ -39,6 +40,15 @@ class GameLoop:
             # For now, let's assume config is valid.
             raise # Re-raise the exception to stop execution if grid fails
 
+        # Initialize Occupancy Grid
+        # Dimensions from config, initialized after grid setup ensures config is loaded
+        # Each cell stores None or a reference to the occupying entity
+        self.occupancy_grid: List[List[Optional[Any]]] = [
+            [None for _ in range(config.GRID_WIDTH)] for _ in range(config.GRID_HEIGHT)
+        ]
+        print(f"DEBUG: Initialized occupancy_grid with dimensions {config.GRID_WIDTH}x{config.GRID_HEIGHT}")
+
+
         # Initialize font for resource display (ensure pygame.font.init() was called in main)
         try:
             self.resource_font = pygame.font.Font(None, config.RESOURCE_FONT_SIZE)
@@ -64,8 +74,8 @@ class GameLoop:
         # For now, AgentManager's __init__ takes task_manager. So TaskManager must be first.
         self.task_manager = TaskManager(resource_manager=self.resource_manager, agent_manager=None) # type: ignore
         
-        # Initialize Agent Manager and pass the TaskManager
-        self.agent_manager = AgentManager(grid=self.grid, task_manager=self.task_manager)
+        # Initialize Agent Manager and pass the TaskManager and occupancy_grid
+        self.agent_manager = AgentManager(grid=self.grid, task_manager=self.task_manager, occupancy_grid=self.occupancy_grid)
         
         # Now, set the agent_manager_ref in TaskManager
         self.task_manager.agent_manager_ref = self.agent_manager
@@ -102,8 +112,19 @@ class GameLoop:
             screen_pos_y = random.uniform(config.SCREEN_SPAWN_MARGIN, config.SCREEN_HEIGHT - config.SCREEN_SPAWN_MARGIN)
             screen_position = pygame.Vector2(screen_pos_x, screen_pos_y)
             grid_position = self.grid.screen_to_grid(screen_position) # Convert to grid coordinates
-            agent = self.agent_manager.create_agent(position=grid_position, speed=config.AGENT_SPEED) # Pass grid position
-            print(f"  Spawned Agent at grid position {grid_position}") # DEBUG
+            
+            # Agents are 1x1
+            entity_grid_width = 1
+            entity_grid_height = 1
+            gx, gy = int(grid_position.x), int(grid_position.y)
+
+            if self.is_area_free(gx, gy, entity_grid_width, entity_grid_height):
+                agent = self.agent_manager.create_agent(position=grid_position, speed=config.AGENT_SPEED) # Pass grid position
+                self.update_occupancy(agent, gx, gy, entity_grid_width, entity_grid_height, is_placing=True)
+                print(f"  Spawned Agent at grid position {grid_position}") # DEBUG
+            else:
+                print(f"Warning: Could not spawn agent at {grid_position}, area occupied.")
+
 
     def handle_input(self):
         """Handles user input using the input handler module."""
@@ -114,43 +135,95 @@ class GameLoop:
             self.show_task_panel = not self.show_task_panel
 
     def _spawn_initial_resources(self):
-        """Creates and places the initial resource nodes."""
+        """Creates and places the initial resource nodes, updating occupancy grid."""
         print(f"Spawning {config.INITIAL_BERRY_BUSHES} berry bushes...") # DEBUG
         spawn_margin = config.SCREEN_SPAWN_MARGIN # Avoid spawning too close to screen edges
-        for _ in range(config.INITIAL_BERRY_BUSHES):
-            # Ensure bushes are placed within screen bounds, respecting margin
+        
+        # BerryBushes are 1x1
+        entity_grid_width = 1
+        entity_grid_height = 1
+        
+        spawned_bushes = 0
+        spawned_wheat_fields = 0
+        attempts = 0
+        max_attempts = config.INITIAL_BERRY_BUSHES * 5 # Try a few times per bush
+
+        while spawned_bushes < config.INITIAL_BERRY_BUSHES and attempts < max_attempts:
+            attempts += 1
             screen_pos_x = random.uniform(spawn_margin, config.SCREEN_WIDTH - spawn_margin)
             screen_pos_y = random.uniform(spawn_margin, config.SCREEN_HEIGHT - spawn_margin)
             screen_position = pygame.Vector2(screen_pos_x, screen_pos_y)
-            grid_position = self.grid.screen_to_grid(screen_position) # Convert to grid coordinates
-            
-            bush = BerryBush(grid_position) # Pass grid coordinates
-            self.resource_manager.add_node(bush)
-            print(f"DEBUG: Spawned BerryBush at screen_pos: {screen_position}, which is grid_pos: {grid_position}. Bush stores: {bush.position}")
+            grid_position = self.grid.screen_to_grid(screen_position)
+            gx, gy = int(grid_position.x), int(grid_position.y)
+
+            if self.is_area_free(gx, gy, entity_grid_width, entity_grid_height):
+                bush = BerryBush(grid_position)
+                self.resource_manager.add_node(bush)
+                self.update_occupancy(bush, gx, gy, entity_grid_width, entity_grid_height, is_placing=True)
+                print(f"DEBUG: Spawned BerryBush at grid_pos: {grid_position}")
+                spawned_bushes += 1
+            # else: # Optional: log failed attempt
+                # print(f"DEBUG: Failed to spawn BerryBush at {grid_position}, area occupied. Attempt {attempts}")
+        if spawned_bushes < config.INITIAL_BERRY_BUSHES:
+            print(f"Warning: Could only spawn {spawned_bushes}/{config.INITIAL_BERRY_BUSHES} berry bushes after {max_attempts} attempts.")
+
 
         # Spawn WheatFields
         num_wheat_fields = config.INITIAL_WHEAT_FIELD # Example number
+        max_attempts_wheat = num_wheat_fields # Define max_attempts_wheat based on the loop iterations
         print(f"Spawning {num_wheat_fields} wheat fields...")
         for _ in range(num_wheat_fields):
             screen_pos_x = random.uniform(spawn_margin, config.SCREEN_WIDTH - spawn_margin)
             screen_pos_y = random.uniform(spawn_margin, config.SCREEN_HEIGHT - spawn_margin)
             grid_position = self.grid.screen_to_grid(pygame.Vector2(screen_pos_x, screen_pos_y))
+            gx, gy = int(grid_position.x), int(grid_position.y)
+
+            # WheatFields are 1x1
+            entity_grid_width = 1 # Assuming WheatField is 1x1
+            entity_grid_height = 1
+
+            if self.is_area_free(gx, gy, entity_grid_width, entity_grid_height):
+                wheat_field = WheatField(grid_position)
+                self.resource_manager.add_node(wheat_field)
+                self.update_occupancy(wheat_field, gx, gy, entity_grid_width, entity_grid_height, is_placing=True)
+                print(f"DEBUG: Spawned WheatField at grid_pos: {grid_position}")
+                spawned_wheat_fields +=1
+            # else: # Optional: log failed attempt
+                # print(f"DEBUG: Failed to spawn WheatField at {grid_position}, area occupied. Attempt {attempts_wheat}")
+        
+        if spawned_wheat_fields < num_wheat_fields:
+             print(f"Warning: Could only spawn {spawned_wheat_fields}/{num_wheat_fields} wheat fields after {max_attempts_wheat} attempts.")
+
+
+        # Spawn Mills - New dynamic spawning logic
+        print(f"Attempting to spawn {config.DESIRED_NUM_MILLS} mills...")
+        mill_width = Mill.GRID_WIDTH
+        mill_height = Mill.GRID_HEIGHT
+        
+        available_mill_spots = self._find_available_spawn_points(mill_width, mill_height)
+        
+        if not available_mill_spots:
+            print(f"Warning: No available space found to spawn any mills of size {mill_width}x{mill_height}.")
+        else:
+            random.shuffle(available_mill_spots) # Shuffle for random placement from available spots
             
-            wheat_field = WheatField(grid_position)
-            self.resource_manager.add_node(wheat_field)
-            print(f"DEBUG: Spawned WheatField at grid_pos: {grid_position}")
+            spawned_mills_count = 0
+            # Attempt to spawn up to the desired number of mills, or fewer if not enough spots
+            for i in range(min(config.DESIRED_NUM_MILLS, len(available_mill_spots))):
+                pos_vec = available_mill_spots[i] # Get a pre-validated spot
+                gx, gy = int(pos_vec.x), int(pos_vec.y)
+                
+                mill = Mill(pos_vec) # Position is top-left grid coordinates
+                self.resource_manager.add_processing_station(mill)
+                self.update_occupancy(mill, gx, gy, mill_width, mill_height, is_placing=True)
+                print(f"DEBUG: Spawned Mill (size {mill_width}x{mill_height}) at grid_pos: {pos_vec}")
+                spawned_mills_count += 1
 
-        # Spawn Mills
-        mill_positions_grid = [Vector2(3, 3), Vector2(self.grid.width_in_cells - 4, self.grid.height_in_cells - 4)]
-        print(f"Spawning {len(mill_positions_grid)} mills...")
-        for pos in mill_positions_grid:
-            if self.grid.is_within_bounds(pos):
-                mill = Mill(pos)
-                self.resource_manager.add_processing_station(mill) # Use the correct method
-                print(f"DEBUG: Spawned Mill at grid_pos: {pos}")
-            else:
-                print(f"Warning: Initial mill position {pos} is outside grid bounds. Skipping.")
-
+            if spawned_mills_count < config.DESIRED_NUM_MILLS and len(available_mill_spots) > 0 :
+                print(f"Warning: Successfully spawned {spawned_mills_count} out of {config.DESIRED_NUM_MILLS} desired mills due to limited available space.")
+            elif spawned_mills_count > 0:
+                 print(f"Successfully spawned {spawned_mills_count} mills.")
+            # If spawned_mills_count is 0 and available_mill_spots was empty, the initial warning covers it.
 
     def _spawn_initial_storage_points(self):
         """Creates and places the initial storage points."""
@@ -158,39 +231,124 @@ class GameLoop:
         middle_screen_x_pixels = config.SCREEN_WIDTH / 2
         middle_screen_y_pixels = config.SCREEN_HEIGHT / 2
         middle_screen_pixel_pos = pygame.math.Vector2(middle_screen_x_pixels, middle_screen_y_pixels)
-        storage_position_grid = self.grid.screen_to_grid(middle_screen_pixel_pos)
+        storage_position_grid_float = self.grid.screen_to_grid(middle_screen_pixel_pos)
+        sgx, sgy = int(storage_position_grid_float.x), int(storage_position_grid_float.y)
+        storage_position_grid = Vector2(sgx, sgy) # Use int coords for placement
+
+        # Storage points are 1x1
+        entity_grid_width = 1
+        entity_grid_height = 1
 
         # Define storage point properties
-        capacity = config.DEFAULT_STORAGE_CAPACITY  # Updated capacity for shared storage
+        capacity = config.DEFAULT_STORAGE_CAPACITY
         accepted_types = [ResourceType.BERRY, ResourceType.WHEAT]
 
-        # Create and add the storage point
-        berry_storage_point = StoragePoint(
-            position=storage_position_grid,
-            overall_capacity=capacity,
-            accepted_resource_types=accepted_types
-        )
-        # Assumes add_storage_point method exists in ResourceManager as per SLICE_2.2_PLAN.md
-        self.resource_manager.add_storage_point(berry_storage_point)
-        print(f"DEBUG: Spawned StoragePoint at grid_pos: {storage_position_grid} for BERRY and WHEAT with capacity {capacity}")
+        if self.is_area_free(sgx, sgy, entity_grid_width, entity_grid_height):
+            berry_storage_point = StoragePoint(
+                position=storage_position_grid,
+                overall_capacity=capacity,
+                accepted_resource_types=accepted_types
+            )
+            self.resource_manager.add_storage_point(berry_storage_point)
+            self.update_occupancy(berry_storage_point, sgx, sgy, entity_grid_width, entity_grid_height, is_placing=True)
+            print(f"DEBUG: Spawned StoragePoint at grid_pos: {storage_position_grid} for BERRY and WHEAT with capacity {capacity}")
+        else:
+            print(f"Warning: Could not spawn BERRY/WHEAT StoragePoint at {storage_position_grid}, area occupied.")
+
 
         # Spawn StoragePoint for Flour Powder
-        flour_storage_position_grid = Vector2(self.grid.width_in_cells / 2 + 5, self.grid.height_in_cells / 2) # Example position
-        if not self.grid.is_within_bounds(flour_storage_position_grid): # Ensure it's on grid
-            flour_storage_position_grid = Vector2(max(0, min(flour_storage_position_grid.x, self.grid.width_in_cells -1)),
-                                                  max(0, min(flour_storage_position_grid.y, self.grid.height_in_cells -1)))
+        flour_storage_pos_float = Vector2(self.grid.width_in_cells / 2 + 5, self.grid.height_in_cells / 2)
+        fsgx, fsgy = int(flour_storage_pos_float.x), int(flour_storage_pos_float.y)
+        
+        # Ensure it's on grid by clamping, then use these clamped values
+        fsgx = max(0, min(fsgx, self.grid.width_in_cells -1))
+        fsgy = max(0, min(fsgy, self.grid.height_in_cells -1))
+        flour_storage_position_grid = Vector2(fsgx, fsgy)
 
 
         flour_storage_capacity = 30
         flour_accepted_types = [ResourceType.FLOUR_POWDER]
-        flour_storage_point = StoragePoint(
-            position=flour_storage_position_grid,
-            overall_capacity=flour_storage_capacity,
-            accepted_resource_types=flour_accepted_types
-        )
-        self.resource_manager.add_storage_point(flour_storage_point)
-        print(f"DEBUG: Spawned StoragePoint at grid_pos: {flour_storage_position_grid} for FLOUR_POWDER with capacity {flour_storage_capacity}")
 
+        if self.is_area_free(fsgx, fsgy, entity_grid_width, entity_grid_height): # Still 1x1
+            flour_storage_point = StoragePoint(
+                position=flour_storage_position_grid,
+                overall_capacity=flour_storage_capacity,
+                accepted_resource_types=flour_accepted_types
+            )
+            self.resource_manager.add_storage_point(flour_storage_point)
+            self.update_occupancy(flour_storage_point, fsgx, fsgy, entity_grid_width, entity_grid_height, is_placing=True)
+            print(f"DEBUG: Spawned StoragePoint at grid_pos: {flour_storage_position_grid} for FLOUR_POWDER with capacity {flour_storage_capacity}")
+        else:
+            print(f"Warning: Could not spawn FLOUR StoragePoint at {flour_storage_position_grid}, area occupied.")
+
+    # Grid Occupancy Helper Functions
+    def is_area_free(self, start_x: int, start_y: int, width: int, height: int) -> bool:
+        """Checks the occupancy_grid to see if all cells in the given rectangle are None."""
+        if not (0 <= start_x < config.GRID_WIDTH and 0 <= start_y < config.GRID_HEIGHT):
+            # print(f"DEBUG: is_area_free check starts out of bounds: ({start_x},{start_y})") # Optional: more verbose logging
+            return False # Starting point is out of bounds
+
+        for y_offset in range(height):
+            for x_offset in range(width):
+                check_x, check_y = start_x + x_offset, start_y + y_offset
+                if not (0 <= check_x < config.GRID_WIDTH and 0 <= check_y < config.GRID_HEIGHT):
+                    # print(f"DEBUG: is_area_free: cell ({check_x},{check_y}) is out of bounds for area.") # Optional
+                    return False # Part of the area is out of bounds
+                if self.occupancy_grid[check_y][check_x] is not None:
+                    # print(f"DEBUG: is_area_free: cell ({check_x},{check_y}) is occupied by {self.occupancy_grid[check_y][check_x]}") # Optional
+                    return False # Cell is occupied
+        return True
+
+    def update_occupancy(self, entity: Any, start_x: int, start_y: int, width: int, height: int, is_placing: bool):
+        """
+        Updates the occupancy_grid.
+        If is_placing is True, marks cells with a reference to entity.
+        If is_placing is False, sets them back to None.
+        """
+        value_to_set = entity if is_placing else None
+        for y_offset in range(height):
+            for x_offset in range(width):
+                op_x, op_y = start_x + x_offset, start_y + y_offset
+                if 0 <= op_x < config.GRID_WIDTH and 0 <= op_y < config.GRID_HEIGHT:
+                    self.occupancy_grid[op_y][op_x] = value_to_set
+                else:
+                    # This case should ideally be prevented by prior checks (e.g., is_area_free or bounds checks before calling)
+                    print(f"Warning: update_occupancy tried to update cell ({op_x},{op_y}) which is out of bounds. Entity: {entity}, Placing: {is_placing}")
+
+    def remove_entity_from_occupancy(self, entity: Any):
+        """
+        Placeholder for removing an entity and clearing its footprint from the occupancy_grid.
+        This would be called when an entity is destroyed or removed from the game.
+        Assumes entity has position, grid_width, and grid_height attributes.
+        """
+        if not hasattr(entity, 'position') or \
+           not hasattr(entity, 'grid_width') or \
+           not hasattr(entity, 'grid_height'):
+            print(f"Warning: Tried to remove entity {entity} from occupancy, but it's missing required attributes (position, grid_width, or grid_height).")
+            return
+
+        start_x = int(entity.position.x)
+        start_y = int(entity.position.y)
+        width = entity.grid_width
+        height = entity.grid_height
+        
+        # Call update_occupancy with is_placing=False
+        self.update_occupancy(entity, start_x, start_y, width, height, is_placing=False)
+        print(f"DEBUG: Cleared occupancy for entity {entity} at ({start_x},{start_y}) with size ({width}x{height}).")
+
+    def _find_available_spawn_points(self, entity_grid_width: int, entity_grid_height: int) -> List[Vector2]:
+        """
+        Scans the grid to find all valid top-left coordinates where an entity
+        of the given dimensions can be placed without overlapping or going out of bounds.
+        """
+        available_spots: List[Vector2] = []
+        # Iterate considering the entity's dimensions to prevent out-of-bounds access
+        # The loop range ensures that the entity fully fits within the grid.
+        for gy in range(config.GRID_HEIGHT - entity_grid_height + 1):
+            for gx in range(config.GRID_WIDTH - entity_grid_width + 1):
+                if self.is_area_free(gx, gy, entity_grid_width, entity_grid_height):
+                    available_spots.append(Vector2(gx, gy))
+        return available_spots
 
     def update(self, dt):
         """Updates game state, including resource nodes."""
