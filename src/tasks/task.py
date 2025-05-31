@@ -122,6 +122,15 @@ class GatherAndDeliverTask(Task):
             self.status = TaskStatus.FAILED
             return False
 
+        # Determine the quantity to aim to reserve for delivery
+        # This needs to be calculated regardless of whether we are finding a new dropoff or using an existing one.
+        qty_to_reserve_for_delivery = min(self.quantity_to_gather, agent.inventory_capacity)
+        if self.target_resource_node_ref: # Should always be true here, but good practice
+            qty_to_reserve_for_delivery = min(self.target_resource_node_ref.current_quantity, qty_to_reserve_for_delivery)
+        else: # Should not happen if node check above passed
+            qty_to_reserve_for_delivery = 0
+
+
         # 2. Find and Reserve Space at Dropoff
         if not self.target_dropoff_ref:
             # Simplified finding logic.
@@ -131,9 +140,7 @@ class GatherAndDeliverTask(Task):
             
             # Placeholder: Find the first storage point that can accept the resource
             # This should ideally consider the quantity we intend to gather.
-            # The quantity to reserve should be min(self.quantity_to_gather, agent.inventory_capacity)
-            qty_to_reserve_for_delivery = min(self.quantity_to_gather, agent.inventory_capacity)
-            qty_to_reserve_for_delivery = min(self.target_resource_node_ref.current_quantity, qty_to_reserve_for_delivery) # Don't reserve more than available
+            # The quantity to reserve was calculated above.
 
             all_storage_points = resource_manager.storage_points # Assuming direct access
             for sp in sorted(all_storage_points, key=lambda s: (s.position - agent.position).length_squared()):
