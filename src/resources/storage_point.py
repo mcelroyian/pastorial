@@ -22,6 +22,7 @@ class StoragePoint:
             accepted_resource_types (Optional[List[ResourceType]]): A list of resource types
                                      this storage point accepts. If None, accepts all types.
         """
+        self.id = uuid.uuid4() # Added for unique identification
         self.logger = logging.getLogger(__name__) # Added
         self.position = position
         self.overall_capacity = overall_capacity

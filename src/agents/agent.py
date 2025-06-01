@@ -637,6 +637,7 @@ class Agent:
 
             if intent_status_update is not None: # Behavior signals intent outcome
                 if self.current_intent:
+                    completed_intent_id = self.current_intent.intent_id # ID of the intent whose status was just updated by its behavior
                     self.current_intent.status = intent_status_update
                     log_message = f"Agent {self.id}: Intent {self.current_intent.intent_id} ({self.current_intent.get_description()}) outcome: {intent_status_update.name}."
                     if self.current_intent.error_message:
@@ -680,7 +681,10 @@ class Agent:
                                 self.current_inventory['resource_type'] = None
                             self.logger.info(f"Agent {self.id} inventory updated: -{delivered_qty}. New total: {self.current_inventory['quantity']}")
                         
-                        self.current_intent = None
+                        # Only set current_intent to None if it wasn't replaced by a new one
+                        # (e.g., by the task's on_intent_outcome method submitting a new intent).
+                        if self.current_intent and self.current_intent.intent_id == completed_intent_id:
+                            self.current_intent = None
                         self._transition_behavior(EvaluatingIntentBehavior)
 
                     elif intent_status_update == IntentStatus.CANCELLED:

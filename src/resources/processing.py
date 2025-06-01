@@ -1,5 +1,6 @@
 import pygame
 import logging # Added
+import uuid # Added for unique id
 from typing import Optional
 from ..resources.resource_types import ResourceType
 from ..core import config # For potential future use, e.g. visual configuration
@@ -37,6 +38,7 @@ class ProcessingStation:
            input_capacity: Maximum amount of input resources the station can hold.
            output_capacity: Maximum amount of output resources the station can hold.
        """
+        self.id = uuid.uuid4() # Added for unique identification
         self.logger = logging.getLogger(__name__) # Added
         if not isinstance(position, pygame.Vector2):
             self.logger.critical("Position must be a pygame.Vector2") # Added
