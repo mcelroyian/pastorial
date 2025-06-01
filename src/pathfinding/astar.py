@@ -1,9 +1,12 @@
 import pygame
 import heapq # For the priority queue (open list)
+import logging # Added for debugging
 from typing import List, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..rendering.grid import Grid # For type hinting Grid class
+
+logger = logging.getLogger(__name__) # Added for debugging
 
 # Heuristic function (Manhattan distance for grid)
 def heuristic(a: pygame.math.Vector2, b: pygame.math.Vector2) -> float:
@@ -43,6 +46,13 @@ def find_path(start_pos: pygame.math.Vector2, end_pos: pygame.math.Vector2, grid
         Optional[List[pygame.math.Vector2]]: A list of grid coordinates representing the path,
                                              or None if no path is found.
     """
+    logger.debug(f"find_path: Called with start_pos={start_pos}, end_pos={end_pos}")
+    # Pathfinding should be allowed from the start_pos even if it's "occupied" by the agent itself.
+    # The critical check is for the end_pos and intermediate steps.
+    if not grid.is_walkable(int(end_pos.x), int(end_pos.y)):
+        logger.warning(f"find_path: End position {end_pos} is not walkable. Pathfinding aborted.")
+        return None # Pathfinding aborted if end is not walkable
+    
     start_node = Node(start_pos)
     end_node = Node(end_pos)
 
@@ -50,10 +60,30 @@ def find_path(start_pos: pygame.math.Vector2, end_pos: pygame.math.Vector2, grid
     closed_list: set[Node] = set() # Using a set for O(1) lookups for Node positions
 
     heapq.heappush(open_list, start_node)
+    logger.debug(f"find_path: Pushed start_node {start_node.position} to open_list. Open list size: {len(open_list)}")
+
+    iteration_count = 0
+    max_iterations = grid.width_in_cells * grid.height_in_cells * 2 # Safety break
 
     while open_list:
+        iteration_count += 1
+        if iteration_count > max_iterations:
+            logger.error(f"find_path: Exceeded max iterations ({max_iterations}). Aborting pathfinding between {start_pos} and {end_pos}.")
+            return None
+
+        if not open_list: # Should not happen if while open_list is the condition, but good for sanity
+            logger.warning(f"find_path: Open list is empty but loop continued. This should not happen.")
+            break
+            
         current_node = heapq.heappop(open_list)
+        logger.debug(f"find_path: Popped current_node {current_node.position} (g={current_node.g_cost:.2f}, h={current_node.h_cost:.2f}, f={current_node.f_cost:.2f}). Open list size: {len(open_list)}")
+        
+        if current_node in closed_list: # If we added duplicate nodes to open_list, skip if already processed
+            logger.debug(f"find_path: Current node {current_node.position} already in closed_list. Skipping.")
+            continue
+            
         closed_list.add(current_node)
+        logger.debug(f"find_path: Added current_node {current_node.position} to closed_list. Closed list size: {len(closed_list)}")
 
         if current_node == end_node:
             path = []
@@ -61,6 +91,7 @@ def find_path(start_pos: pygame.math.Vector2, end_pos: pygame.math.Vector2, grid
             while temp is not None:
                 path.append(temp.position)
                 temp = temp.parent
+            logger.info(f"find_path: Path found from {start_pos} to {end_pos}. Length: {len(path)}. Path: {path[::-1]}")
             return path[::-1]  # Return reversed path
 
         # Get neighbors (adjacent grid cells)
@@ -79,15 +110,18 @@ def find_path(start_pos: pygame.math.Vector2, end_pos: pygame.math.Vector2, grid
 
             # Check if within grid bounds
             if not grid.is_within_bounds(node_position):
+                logger.debug(f"find_path: Neighbor {node_position} is out of bounds.")
                 continue
 
             # Check if walkable
             if not grid.is_walkable(int(node_position.x), int(node_position.y)):
+                logger.debug(f"find_path: Neighbor {node_position} is not walkable.")
                 continue
 
             neighbor = Node(node_position, current_node)
 
             if neighbor in closed_list:
+                logger.debug(f"find_path: Neighbor {neighbor.position} already in closed_list.")
                 continue
 
             # Calculate costs
@@ -117,10 +151,13 @@ def find_path(start_pos: pygame.math.Vector2, end_pos: pygame.math.Vector2, grid
             neighbor.g_cost = tentative_g_cost
             neighbor.h_cost = heuristic(neighbor.position, end_node.position)
             neighbor.f_cost = neighbor.g_cost + neighbor.h_cost
+            logger.debug(f"find_path: Evaluating neighbor {neighbor.position}. Tentative g_cost={neighbor.g_cost:.2f}, h_cost={neighbor.h_cost:.2f}, f_cost={neighbor.f_cost:.2f}")
             
             # Add the neighbor to the open list
             # If it was already there but with a worse path, this new one will be prioritized.
             # If it wasn't there, it gets added.
             heapq.heappush(open_list, neighbor)
+            logger.debug(f"find_path: Pushed neighbor {neighbor.position} to open_list. Open list size: {len(open_list)}")
             
+    logger.warning(f"find_path: Path not found from {start_pos} to {end_pos}. Open list became empty after {iteration_count} iterations.")
     return None # Path not found

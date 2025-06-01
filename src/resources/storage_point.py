@@ -41,7 +41,12 @@ class StoragePoint:
 
     def get_available_capacity_for_reservation(self) -> int:
         """Calculates space available for new reservations."""
-        return self.overall_capacity - self.get_current_load() - self.get_total_reserved_quantity()
+        overall_capacity = self.overall_capacity
+        current_load = self.get_current_load()
+        total_reserved = self.get_total_reserved_quantity()
+        available_capacity = overall_capacity - current_load - total_reserved
+        self.logger.debug(f"StoragePoint {self.position} get_available_capacity_for_reservation: Overall={overall_capacity}, Load={current_load}, Reserved={total_reserved}, Available={available_capacity}")
+        return available_capacity
 
     def can_accept(self, resource_type: ResourceType, quantity: int, for_reservation: bool = False) -> bool:
         """
@@ -49,16 +54,24 @@ class StoragePoint:
         If for_reservation is True, checks against capacity available for new reservations.
         Otherwise, checks against overall capacity minus existing reservations (for direct non-task additions).
         """
+        self.logger.debug(f"StoragePoint {self.position} can_accept: Checking for type={resource_type.name}, quantity={quantity}, for_reservation={for_reservation}")
         if self.accepted_resource_types is not None and resource_type not in self.accepted_resource_types:
+            self.logger.debug(f"StoragePoint {self.position} can_accept: Type {resource_type.name} not in accepted_resource_types. Result: False")
             return False
         
         if for_reservation:
-            if quantity > self.get_available_capacity_for_reservation():
+            available_for_res = self.get_available_capacity_for_reservation()
+            if quantity > available_for_res:
+                self.logger.debug(f"StoragePoint {self.position} can_accept (for_reservation): Quantity {quantity} > available_for_res {available_for_res}. Result: False")
                 return False
         else: # Checking for a direct, non-reserved addition
             # A direct addition must fit into space not physically filled and not already reserved by others.
-            if self.get_current_load() + quantity > self.overall_capacity - self.get_total_reserved_quantity():
+            current_load = self.get_current_load()
+            total_reserved = self.get_total_reserved_quantity()
+            if current_load + quantity > self.overall_capacity - total_reserved:
+                self.logger.debug(f"StoragePoint {self.position} can_accept (direct_add): Load {current_load} + Qty {quantity} > Overall {self.overall_capacity} - Reserved {total_reserved}. Result: False")
                 return False
+        self.logger.debug(f"StoragePoint {self.position} can_accept: All checks passed. Result: True")
         return True
 
     def reserve_space(self, task_id: uuid.UUID, resource_type: ResourceType, quantity: int) -> int:
@@ -74,6 +87,7 @@ class StoragePoint:
             int: The actual quantity of space reserved. Can be less than requested if
                  not enough space is available or 0 if type not accepted or no space.
         """
+        self.logger.debug(f"StoragePoint {self.position} reserve_space: Attempting for task_id={task_id}, resource_type={resource_type.name}, quantity={quantity}")
         if task_id in self.reservations: # Task already has a reservation, should modify or release first
             self.logger.warning(f"Task {task_id} attempting to reserve space again. Current reservation: {self.reservations[task_id]}") # Changed
             # Potentially allow modification, but for now, let's assume new reservation means prior one should be handled.
@@ -84,22 +98,31 @@ class StoragePoint:
             # This simplifies logic. If this call happens, it's likely an error in task logic or a new reservation.
             # Let's assume it's a new reservation attempt.
             pass # Allow re-evaluation if needed.
+        
+        can_accept_requested_quantity = self.can_accept(resource_type, quantity, for_reservation=True)
+        self.logger.debug(f"StoragePoint {self.position} reserve_space: can_accept({resource_type.name}, {quantity}, for_reservation=True) returned {can_accept_requested_quantity}")
 
-        if not self.can_accept(resource_type, quantity, for_reservation=True):
+        if not can_accept_requested_quantity:
             # Try to reserve as much as possible
-            available_for_res = self.get_available_capacity_for_reservation()
+            available_for_res = self.get_available_capacity_for_reservation() # This will log its components
+            self.logger.debug(f"StoragePoint {self.position} reserve_space: Initial quantity {quantity} not acceptable. Available for reservation: {available_for_res}")
             if self.accepted_resource_types is not None and resource_type not in self.accepted_resource_types:
+                 self.logger.debug(f"StoragePoint {self.position} reserve_space: Resource type {resource_type.name} not accepted. Returning 0.")
                  return 0 # Cannot accept this type at all
             
             quantity_to_reserve = min(quantity, available_for_res)
+            self.logger.debug(f"StoragePoint {self.position} reserve_space: Will attempt to reserve min(quantity, available_for_res) = min({quantity}, {available_for_res}) = {quantity_to_reserve}")
             if quantity_to_reserve <= 0:
+                self.logger.debug(f"StoragePoint {self.position} reserve_space: quantity_to_reserve is {quantity_to_reserve}. Returning 0.")
                 return 0
         else:
             quantity_to_reserve = quantity
+            self.logger.debug(f"StoragePoint {self.position} reserve_space: Initial quantity {quantity} is acceptable. quantity_to_reserve = {quantity_to_reserve}")
         
         # Add to existing reservation for the task or create a new one
-        self.reservations[task_id] = self.reservations.get(task_id, 0) + quantity_to_reserve
-        self.logger.info(f"Storage at {self.position} reserved {quantity_to_reserve} for task {task_id}. Total reserved: {self.get_total_reserved_quantity()}") # Changed
+        current_reservation_for_task = self.reservations.get(task_id, 0)
+        self.reservations[task_id] = current_reservation_for_task + quantity_to_reserve
+        self.logger.info(f"Storage at {self.position} reserved {quantity_to_reserve} for task {task_id} (previous for task: {current_reservation_for_task}, new total for task: {self.reservations[task_id]}). Total all reservations: {self.get_total_reserved_quantity()}") # Changed
         return quantity_to_reserve
 
     def release_reservation(self, task_id: uuid.UUID, quantity_to_release: Optional[int] = None) -> bool:

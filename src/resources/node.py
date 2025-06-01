@@ -24,11 +24,12 @@ class ResourceNode(ABC):
             self.logger.critical("Position must be a pygame.Vector2") # Added
             raise TypeError("Position must be a pygame.Vector2")
         self.position = position
+        self.id: uuid.UUID = uuid.uuid4()
         self.capacity = int(capacity) # Ensure capacity is integer
         self.generation_interval = generation_interval
         self.resource_type = resource_type # Added
         self.current_quantity = 0
-        self._generation_timer = 0.0 
+        self._generation_timer = 0.0
         
         # --- Attributes for task-based claiming ---
         self.claimed_by_task_id: Optional[uuid.UUID] = None
@@ -50,6 +51,8 @@ class ResourceNode(ABC):
                 resources_needed = self.capacity - self.current_quantity
                 actual_to_add = min(resources_to_add, resources_needed)
                 self.current_quantity += actual_to_add
+                if actual_to_add > 0:
+                    self.logger.debug(f"Node {self.id} at {self.position} ({self.resource_type.name}) regenerated {actual_to_add}. New quantity: {self.current_quantity}/{self.capacity}")
 
     # --- Methods for task-based claiming ---
     def claim(self, agent_id: uuid.UUID, task_id: uuid.UUID) -> bool:

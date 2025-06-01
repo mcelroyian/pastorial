@@ -12,7 +12,11 @@ def main():
     # - Default log level is INFO.
     # - Set 'src.agents.agent' logger to DEBUG for more detailed agent logs.
     per_module_log_levels = {
-        "src.agents.agent": logging.DEBUG
+        "src.agents.agent": logging.DEBUG,
+        "src.agents.agent_behaviors": logging.INFO, # Keep this at INFO for now
+        "src.resources.storage_point": logging.INFO,
+        "src.resources.node": logging.DEBUG,
+        "src.pathfinding.astar": logging.INFO
     }
     setup_logging(default_level=logging.INFO, per_module_levels=per_module_log_levels)
     logger = logging.getLogger(__name__) # Added

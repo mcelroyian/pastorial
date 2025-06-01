@@ -138,28 +138,32 @@ class Agent:
                  self._transition_behavior(IdleBehavior)
             return
 
-        self.logger.debug(f"Agent {self.id} processing intent: {self.current_intent}")
+        self.logger.debug(f"Agent {self.id} processing intent: {self.current_intent} (Type: {type(self.current_intent)})")
         self.current_intent.status = IntentStatus.ACTIVE # Mark as active as we are starting it
 
         intent_type = type(self.current_intent)
+        self.logger.debug(f"Agent {self.id} _process_current_intent: Intent type determined as {intent_type}")
 
         if intent_type == MoveIntent:
+            self.logger.debug(f"Agent {self.id} _process_current_intent: Matched MoveIntent. Transitioning to MovingBehavior.")
             self._transition_behavior(MovingBehavior, self.current_intent)
         elif intent_type == GatherIntent or intent_type == DeliverIntent or intent_type == InteractAtTargetIntent:
+            self.logger.debug(f"Agent {self.id} _process_current_intent: Matched Gather/Deliver/InteractAtTargetIntent group. Current intent actual type: {type(self.current_intent)}")
             # These could map to InteractingBehavior, which would then use intent details
             # For now, assuming InteractAtTargetIntent is used for the timed part of gathering/delivering.
             # GatherIntent/DeliverIntent might need specific logic if they are not just timers.
             if isinstance(self.current_intent, (GatherIntent, DeliverIntent, InteractAtTargetIntent)):
+                 self.logger.debug(f"Agent {self.id} _process_current_intent: isinstance check PASSED for InteractingBehavior. Transitioning to InteractingBehavior with intent: {self.current_intent}")
                  self._transition_behavior(InteractingBehavior, self.current_intent)
             else: # Should not happen if intent_type matched
-                 self.logger.error(f"Agent {self.id}: Unhandled intent type {intent_type} in _process_current_intent after type check.")
+                 self.logger.error(f"Agent {self.id}: Unhandled intent type {intent_type} in _process_current_intent after type check (isinstance FAILED). Intent: {self.current_intent}")
                  if self.current_intent: # Check if current_intent is not None before accessing status
                     self.current_intent.status = IntentStatus.FAILED
-                    self.current_intent.error_message = f"Agent cannot handle intent type {intent_type}"
+                    self.current_intent.error_message = f"Agent cannot handle intent type {intent_type} (isinstance failed)"
                  self._transition_behavior(IdleBehavior) # Fallback
         # Add more intent types here (e.g., specific gather, deliver behaviors if needed)
         else:
-            self.logger.warning(f"Agent {self.id}: Unknown intent type {intent_type}. Intent: {self.current_intent}")
+            self.logger.warning(f"Agent {self.id}: Unknown intent type {intent_type}. Intent: {self.current_intent}. Transitioning to IdleBehavior.")
             if self.current_intent: # Check if current_intent is not None
                 self.current_intent.status = IntentStatus.FAILED
                 self.current_intent.error_message = f"Unknown intent type: {intent_type}"

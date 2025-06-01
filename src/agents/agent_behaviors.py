@@ -123,12 +123,20 @@ class InteractingBehavior(AgentBehavior):
 
     def enter(self, intent: Optional[Intent] = None):
         self.agent.logger.debug(f"Agent {self.agent.id} entering InteractingBehavior.")
+        if intent:
+            self.agent.logger.info(f"Agent {self.agent.id} InteractingBehavior.enter: Received intent type: {type(intent)}")
+            self.agent.logger.info(f"Agent {self.agent.id} InteractingBehavior.enter: Intent __dict__: {intent.__dict__}")
+            has_duration = hasattr(intent, 'duration')
+            self.agent.logger.info(f"Agent {self.agent.id} InteractingBehavior.enter: hasattr(intent, 'duration') -> {has_duration}")
+            if has_duration:
+                self.agent.logger.info(f"Agent {self.agent.id} InteractingBehavior.enter: intent.duration value: {intent.duration}")
+
         if intent and hasattr(intent, 'duration'):
             self.interaction_intent = intent
             self.timer = getattr(intent, 'duration', self.agent.config.DEFAULT_GATHERING_TIME) # Fallback, should be on intent
             self.agent.logger.debug(f"Agent {self.agent.id} InteractingBehavior: Starting interaction '{getattr(intent, 'interaction_type', 'Unknown')}' for {self.timer}s. Intent: {intent.intent_id}")
         else:
-            self.agent.logger.error(f"Agent {self.agent.id} InteractingBehavior: Entered without a valid InteractAtTargetIntent or duration.")
+            self.agent.logger.error(f"Agent {self.agent.id} InteractingBehavior: Entered without a valid InteractAtTargetIntent or duration. Intent was: {intent}")
             self.timer = -1 # Force immediate failure in update
 
     def update(self, dt: float) -> Optional[IntentStatus]:

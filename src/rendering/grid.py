@@ -1,5 +1,6 @@
 import pygame
 import logging # Added
+from typing import Optional, List # Added Optional and List for type hinting
 from src.core import config
 from pygame.math import Vector2
 
@@ -98,3 +99,37 @@ class Grid:
                 if self.occupancy_grid[cell_y][cell_x] != 0: # Cell is occupied
                     return False
         return True
+
+    def find_walkable_adjacent_tile(self, target_pos: Vector2) -> Optional[Vector2]:
+        """
+        Finds a walkable, in-bounds tile adjacent (N, S, E, W) to the target_pos.
+        Returns the position of the first walkable adjacent tile found, or None.
+        Priority: S, E, N, W
+        """
+        self.logger.debug(f"Grid: Finding walkable adjacent tile for {target_pos}")
+        
+        # (dx, dy)
+        neighbor_offsets = [
+            (0, 1),  # South
+            (1, 0),  # East
+            (0, -1), # North
+            (-1, 0)  # West
+        ]
+
+        for dx, dy in neighbor_offsets:
+            adj_pos = Vector2(target_pos.x + dx, target_pos.y + dy)
+            adj_x, adj_y = int(adj_pos.x), int(adj_pos.y)
+            
+            # self.logger.debug(f"Grid: Checking neighbor {adj_pos} for target {target_pos}")
+            if self.is_walkable(adj_x, adj_y): # is_walkable also checks bounds
+                self.logger.debug(f"Grid: Found walkable adjacent tile {adj_pos} for target {target_pos}")
+                return adj_pos
+            # else: # Debug logging for why it's not walkable (can be verbose)
+                # if not self.is_within_bounds(adj_pos):
+                #     self.logger.debug(f"Grid: Neighbor {adj_pos} for {target_pos} is out of bounds.")
+                # elif self.occupancy_grid[adj_y][adj_x] != 0:
+                #      self.logger.debug(f"Grid: Neighbor {adj_pos} for {target_pos} is occupied. Occupancy: {self.occupancy_grid[adj_y][adj_x]}")
+
+
+        self.logger.warning(f"Grid: No walkable adjacent tile found for {target_pos}")
+        return None

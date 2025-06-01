@@ -53,13 +53,17 @@ class AgentManager:
             # Provide a default if not specified, e.g. based on global config or common resources
             resource_priorities = [ResourceType.BERRY, ResourceType.WHEAT]
 
+        # Validate agent spawn position
+        if not self.grid.is_walkable(int(position.x), int(position.y)):
+            self.logger.warning(f"Attempting to spawn agent {agent_id} at non-walkable position {position}. This may lead to issues.")
+            # Optionally, add logic here to find a nearby walkable tile or prevent spawning.
+
         new_agent = Agent(
             agent_id=agent_id,
             position=position,
             speed=speed,
             grid=self.grid,
             task_manager=self.task_manager_ref, # Pass the TaskManager reference
-            # occupancy_grid=self.occupancy_grid, # Removed
             inventory_capacity=inventory_capacity,
             resource_priorities=resource_priorities
         )

@@ -120,6 +120,13 @@ class GatherAndDeliverTask(Task):
         self._current_step_key: str = "find_resource_and_dropoff" # Initial step
 
     def prepare(self, agent: 'Agent', resource_manager: 'ResourceManager') -> bool:
+        # Reset fields that might be stale from a previous failed attempt
+        self.target_resource_node_ref = None
+        self.target_dropoff_ref = None
+        self.reserved_at_node = False
+        self.reserved_at_dropoff_quantity = 0
+        self.error_message = None # Clear any previous error messages
+
         # from ..agents.agent import AgentState # REMOVED
         self._update_timestamp()
         self.status = TaskStatus.PREPARING
@@ -192,7 +199,21 @@ class GatherAndDeliverTask(Task):
             self.error_message = "Target resource node ref is None in prepare, cannot create MoveIntent."
             return False
 
-        move_intent = MoveIntent(self.target_resource_node_ref.position)
+        # Find a walkable tile adjacent to the resource node
+        interaction_pos_node = agent.grid.find_walkable_adjacent_tile(self.target_resource_node_ref.position) # type: ignore
+        if not interaction_pos_node:
+            self.error_message = f"Could not find walkable adjacent tile for resource node {self.target_resource_node_ref.position}."
+            # Release claimed node and dropoff reservation if interaction spot not found
+            if self.target_resource_node_ref and self.reserved_at_node:
+                self.target_resource_node_ref.release(agent.id, self.task_id) # type: ignore
+                self.reserved_at_node = False
+            if self.target_dropoff_ref and self.reserved_at_dropoff_quantity > 0:
+                self.target_dropoff_ref.release_reservation(self.task_id, self.reserved_at_dropoff_quantity) # type: ignore
+                self.reserved_at_dropoff_quantity = 0
+            self.status = TaskStatus.FAILED
+            return False
+
+        move_intent = MoveIntent(interaction_pos_node)
         self._submit_intent_to_agent(agent, move_intent)
         
         self.status = TaskStatus.IN_PROGRESS_MOVE_TO_RESOURCE # Initial task status
@@ -330,12 +351,21 @@ class GatherAndDeliverTask(Task):
                 # Transition to moving to dropoff
                 self._current_step_key = "move_to_dropoff"
                 self.status = TaskStatus.IN_PROGRESS_MOVE_TO_DROPOFF
-                move_to_dropoff_intent = MoveIntent(self.target_dropoff_ref.position)
+                
+                # Find a walkable tile adjacent to the dropoff
+                interaction_pos_dropoff = agent.grid.find_walkable_adjacent_tile(self.target_dropoff_ref.position) # type: ignore
+                if not interaction_pos_dropoff:
+                    self.error_message = f"Could not find walkable adjacent tile for dropoff {self.target_dropoff_ref.position}."
+                    self.status = TaskStatus.FAILED
+                    # Note: Resources are in agent's inventory. Cleanup will handle node/storage reservations if any are left.
+                    return
+
+                move_to_dropoff_intent = MoveIntent(interaction_pos_dropoff)
                 self._submit_intent_to_agent(agent, move_to_dropoff_intent)
 
-                if self.target_resource_node_ref and (self.quantity_gathered >= self.quantity_to_gather or self.target_resource_node_ref.current_quantity < 1):
+                if self.target_resource_node_ref and (self.quantity_gathered >= self.quantity_to_gather or self.target_resource_node_ref.current_quantity < 1): # type: ignore
                     if self.reserved_at_node:
-                         self.target_resource_node_ref.release(agent.id, self.task_id)
+                         self.target_resource_node_ref.release(agent.id, self.task_id) # type: ignore
                          self.reserved_at_node = False
 
             elif self._current_step_key == "move_to_dropoff":
@@ -483,8 +513,19 @@ class DeliverWheatToMillTask(Task):
             self.status = TaskStatus.FAILED
             self.error_message = "target_storage_ref is None in prepare for DeliverWheatToMillTask."
             return False
+        
+        # Find a walkable tile adjacent to the storage point for pickup
+        interaction_pos_storage = agent.grid.find_walkable_adjacent_tile(self.target_storage_ref.position) # type: ignore
+        if not interaction_pos_storage:
+            self.error_message = f"Could not find walkable adjacent tile for storage {self.target_storage_ref.position}."
+            # Release reservations if interaction spot not found
+            if self.target_storage_ref and self.reserved_at_storage_for_pickup_quantity > 0:
+                self.target_storage_ref.release_pickup_reservation(self.task_id, self.resource_to_retrieve, self.reserved_at_storage_for_pickup_quantity) # type: ignore
+                self.reserved_at_storage_for_pickup_quantity = 0
+            self.status = TaskStatus.FAILED
+            return False
 
-        move_to_storage_intent = MoveIntent(self.target_storage_ref.position)
+        move_to_storage_intent = MoveIntent(interaction_pos_storage)
         self._submit_intent_to_agent(agent, move_to_storage_intent)
 
         self.status = TaskStatus.IN_PROGRESS_MOVE_TO_STORAGE
@@ -608,7 +649,16 @@ class DeliverWheatToMillTask(Task):
                 if self.quantity_retrieved > 0:
                     self._current_step_key = "move_to_mill"
                     self.status = TaskStatus.IN_PROGRESS_MOVE_TO_PROCESSOR
-                    move_to_mill_intent = MoveIntent(self.target_processor_ref.position) # type: ignore
+                    
+                    # Find a walkable tile adjacent to the mill
+                    interaction_pos_mill = agent.grid.find_walkable_adjacent_tile(self.target_processor_ref.position) # type: ignore
+                    if not interaction_pos_mill:
+                        self.error_message = f"Could not find walkable adjacent tile for mill {self.target_processor_ref.position}."
+                        self.status = TaskStatus.FAILED
+                        # Agent has items, but can't path to mill. This is a task failure.
+                        return
+
+                    move_to_mill_intent = MoveIntent(interaction_pos_mill)
                     self._submit_intent_to_agent(agent, move_to_mill_intent)
                 else: # Nothing retrieved, or reservation exhausted before getting anything
                     self.status = TaskStatus.FAILED; self.error_message = "No items retrieved from storage, or reservation issue."; return
