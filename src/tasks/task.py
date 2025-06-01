@@ -1,19 +1,20 @@
 import uuid
 import time
 from abc import ABC, abstractmethod
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING, List
 
 from .task_types import TaskType, TaskStatus
 from ..resources.resource_types import ResourceType # Assuming this path is correct
-from ..agents.agent_defs import AgentState # Import from agent_defs
+from ..agents.agent_defs import AgentState # Import from agent_defs # Will be removed from tasks later
+from ..agents.intents import Intent, IntentStatus, MoveIntent, InteractAtTargetIntent # New import
 
 # Forward references to avoid circular imports
 if TYPE_CHECKING:
-    from ..agents.agent import Agent # Agent can stay for type hinting if not used directly
+    from ..agents.agent import Agent
     from ..resources.manager import ResourceManager # Assuming manager.py is in src/resources/
     from ..resources.node import ResourceNode
     from ..resources.storage_point import StoragePoint
-    # Add ..resources.processing.ProcessingStation if needed for other task types
+    # from ..agents.intents import Intent # Already imported
 
 class Task(ABC):
     """Base class for all tasks an agent can perform."""
@@ -27,6 +28,7 @@ class Task(ABC):
         self.creation_time: float = time.time()
         self.last_update_time: float = self.creation_time
         self.error_message: Optional[str] = None
+        self.active_intents: List[uuid.UUID] = [] # To track intents submitted by this task
 
     @abstractmethod
     def prepare(self, agent: 'Agent', resource_manager: 'ResourceManager') -> bool:
@@ -64,8 +66,30 @@ class Task(ABC):
         """Returns a string description of the current target or goal of the task for debugging/UI."""
         pass
 
+    @abstractmethod
+    def on_intent_outcome(self, agent: 'Agent', intent_id: uuid.UUID, intent_status: IntentStatus, resource_manager: 'ResourceManager'):
+        """
+        Called by the Agent when an Intent submitted by this task has an outcome.
+        The task should update its internal state based on the intent's success or failure
+        and potentially submit new intents or change its overall status.
+        """
+        pass
+
     def _update_timestamp(self):
         self.last_update_time = time.time()
+
+    def _submit_intent_to_agent(self, agent: 'Agent', intent: 'Intent'):
+        """Helper to submit an intent and track it."""
+        # Ensure agent has the submit_intent method
+        if hasattr(agent, 'submit_intent') and callable(getattr(agent, 'submit_intent')):
+            agent.submit_intent(intent) # type: ignore
+            self.active_intents.append(intent.intent_id)
+            print(f"Task {self.task_id} submitted intent {intent.intent_id} ({intent.get_description()}) to agent {agent.id}")
+        else:
+            print(f"ERROR: Task {self.task_id} tried to submit intent, but agent {agent.id} does not have submit_intent method.")
+            # This would be a critical error, potentially fail the task.
+            self.status = TaskStatus.FAILED
+            self.error_message = "Agent does not support intent submission."
 
 
 class GatherAndDeliverTask(Task):
@@ -162,187 +186,44 @@ class GatherAndDeliverTask(Task):
             return False
 
         # If all preparations are successful:
-        self.status = TaskStatus.IN_PROGRESS_MOVE_TO_RESOURCE # First active step
-        self._current_step_key = "move_to_resource"
-        agent.set_objective_move_to_resource(self.target_resource_node_ref.position) # MODIFIED
-        print(f"Task {self.task_id} PREPARED for agent {agent.id}. Target Node: {self.target_resource_node_ref.position}, Target Dropoff: {self.target_dropoff_ref.position}, Reserved Dropoff Qty: {self.reserved_at_dropoff_quantity}")
+        # Submit the first intent to the agent
+        if not self.target_resource_node_ref: # Should have been caught earlier
+            self.status = TaskStatus.FAILED
+            self.error_message = "Target resource node ref is None in prepare, cannot create MoveIntent."
+            return False
+
+        move_intent = MoveIntent(self.target_resource_node_ref.position)
+        self._submit_intent_to_agent(agent, move_intent)
+        
+        self.status = TaskStatus.IN_PROGRESS_MOVE_TO_RESOURCE # Initial task status
+        self._current_step_key = "move_to_resource" # Task's internal tracking of its current phase
+        
+        # Pathfinding success/failure will be handled by on_intent_outcome.
+        # No need to check agent.current_path here anymore.
+        print(f"Task {self.task_id} PREPARED for agent {agent.id}. Submitted MoveIntent to Node: {self.target_resource_node_ref.position}. Reserved Dropoff Qty: {self.reserved_at_dropoff_quantity}")
         return True
 
     def execute_step(self, agent: 'Agent', dt: float, resource_manager: 'ResourceManager') -> TaskStatus:
         self._update_timestamp()
-        # from ..agents.agent import AgentState # Now imported via TYPE_CHECKING
-
-        if not self.target_resource_node_ref or not self.target_dropoff_ref:
-            self.error_message = "Target resource or dropoff became invalid during execution."
-            self.status = TaskStatus.FAILED
-            return self.status
-
-        # --- Step: Move to Resource Node ---
-        if self._current_step_key == "move_to_resource":
-            # Agent's objective (and state) was set to MOVING_TO_RESOURCE in prepare()
-            # or when transitioning to this step.
-            if agent.state == AgentState.MOVING_TO_RESOURCE:
-                # Agent is actively moving via its _follow_path() method.
-                # Task just waits for the agent to complete its movement.
-                return self.status # IN_PROGRESS_MOVE_TO_RESOURCE
-            elif agent.state == AgentState.IDLE: # Agent has stopped moving (path complete or failed)
-                if self.target_resource_node_ref and \
-                   agent.position.distance_to(self.target_resource_node_ref.position) < agent.target_tolerance:
-                    # Movement successful: Agent is at the resource node
-                    self._current_step_key = "gather_resource"
-                    self.status = TaskStatus.IN_PROGRESS_GATHERING
-                    agent.set_objective_gather_resource(agent.config.DEFAULT_GATHERING_TIME)
-                    print(f"Task {self.task_id}: Agent {agent.id} reached resource node. Starting to gather.")
-                else:
-                    # Movement failed: Agent is IDLE but not at the target
-                    self.error_message = f"Agent {agent.id} failed to reach resource node at {self.target_resource_node_ref.position if self.target_resource_node_ref else 'None'}. Current pos: {agent.position}, State: {agent.state}"
-                    print(self.error_message)
-                    self.status = TaskStatus.FAILED
-            elif agent.state not in [AgentState.MOVING_TO_RESOURCE, AgentState.GATHERING_RESOURCE]: # Agent in an unexpected state
-                self.error_message = f"Agent {agent.id} in unexpected state {agent.state} during MOVING_TO_RESOURCE phase for task {self.task_id}."
-                print(self.error_message)
-                self.status = TaskStatus.FAILED
-            return self.status
-
-        # --- Step: Gather Resource ---
-        elif self._current_step_key == "gather_resource":
-            # Objective to gather is set when transitioning to this step.
-            # Here, we just check the timer and node status.
-            # agent.set_objective_gather_resource(agent.config.DEFAULT_GATHERING_TIME) # REMOVED: Objective set on transition
-
-            # Check if node still has resources / is still claimed by this task
-            if self.target_resource_node_ref.current_quantity <= 0 or \
-               self.target_resource_node_ref.claimed_by_task_id != self.task_id:
-                self.error_message = "Resource node depleted or claim lost during gathering."
-                # Potentially try to re-claim or find new node, or just fail
-                self.status = TaskStatus.FAILED
-                return self.status
-
-            agent.gathering_timer -= dt
-            if agent.gathering_timer <= 0:
-                # Determine how much to gather:
-                # Max agent can carry = agent.inventory_capacity - agent.current_inventory['quantity']
-                # Max task wants = self.quantity_to_gather - self.quantity_gathered
-                # Max can be dropped off = self.reserved_at_dropoff_quantity - self.quantity_delivered (assuming we deliver all gathered in one go)
-                # Max available at node = self.target_resource_node_ref.current_quantity
-                
-                # Agent should only gather what it can carry AND what is reserved at dropoff for this trip
-                # (assuming one gather -> one deliver cycle for simplicity here)
-                can_carry_more = agent.inventory_capacity - agent.current_inventory['quantity']
-                
-                # Amount to gather for this specific trip, limited by what's reserved at dropoff and what agent can carry
-                amount_to_attempt_gather = min(
-                    can_carry_more,
-                    self.reserved_at_dropoff_quantity, # This is the crucial link to prevent over-collection for storage
-                    self.quantity_to_gather - self.quantity_gathered # Overall task goal
-                )
-                
-                if amount_to_attempt_gather > 0:
-                    gathered = self.target_resource_node_ref.collect_resource(amount_to_attempt_gather)
-                    if gathered > 0:
-                        # Assume agent inventory handles mixed types or is cleared for new task type
-                        if agent.current_inventory['resource_type'] is None or agent.current_inventory['resource_type'] == self.resource_type_to_gather:
-                            agent.current_inventory['resource_type'] = self.resource_type_to_gather
-                            agent.current_inventory['quantity'] += gathered
-                            self.quantity_gathered += gathered
-                            print(f"Task {self.task_id}: Agent {agent.id} gathered {gathered} {self.resource_type_to_gather.name}. Total gathered for task: {self.quantity_gathered}")
-                        else:
-                            self.error_message = "Agent inventory has different resource type."
-                            self.status = TaskStatus.FAILED # Or handle this more gracefully
-                            return self.status
-                
-                # Transition to moving to dropoff
-                self._current_step_key = "move_to_dropoff"
-                self.status = TaskStatus.IN_PROGRESS_MOVE_TO_DROPOFF
-                agent.set_objective_move_to_storage(self.target_dropoff_ref.position) # MODIFIED
-                
-                # Release node claim if we are done with it for this task
-                # (e.g. if quantity_to_gather is met or node is empty)
-                # For simplicity, if task is to gather X, and we gathered X, or node is empty, release.
-                if self.quantity_gathered >= self.quantity_to_gather or self.target_resource_node_ref.current_quantity < 1:
-                    if self.reserved_at_node: # Check if it was claimed by this task
-                         self.target_resource_node_ref.release(agent.id, self.task_id)
-                         self.reserved_at_node = False # Update task's view of claim
-            return self.status
-
-        # --- Step: Move to Dropoff ---
-        elif self._current_step_key == "move_to_dropoff":
-            # Agent's objective (and state) was set to MOVING_TO_STORAGE when transitioning.
-            if agent.state == AgentState.MOVING_TO_STORAGE:
-                return self.status # IN_PROGRESS_MOVE_TO_DROPOFF
-            elif agent.state == AgentState.IDLE:
-                if self.target_dropoff_ref and \
-                   agent.position.distance_to(self.target_dropoff_ref.position) < agent.target_tolerance:
-                    # Movement successful: Agent is at the dropoff
-                    self._current_step_key = "deliver_resource"
-                    self.status = TaskStatus.IN_PROGRESS_DELIVERING
-                    agent.set_objective_deliver_resource(agent.config.DEFAULT_DELIVERY_TIME)
-                    print(f"Task {self.task_id}: Agent {agent.id} reached dropoff. Starting to deliver.")
-                else:
-                    # Movement failed
-                    self.error_message = f"Agent {agent.id} failed to reach dropoff at {self.target_dropoff_ref.position if self.target_dropoff_ref else 'None'}. Current pos: {agent.position}, State: {agent.state}"
-                    print(self.error_message)
-                    self.status = TaskStatus.FAILED
-            elif agent.state not in [AgentState.MOVING_TO_STORAGE, AgentState.DELIVERING_RESOURCE]: # Agent in an unexpected state
-                self.error_message = f"Agent {agent.id} in unexpected state {agent.state} during MOVING_TO_DROPOFF phase for task {self.task_id}."
-                print(self.error_message)
-                self.status = TaskStatus.FAILED
-            return self.status
-
-        # --- Step: Deliver Resource ---
-        elif self._current_step_key == "deliver_resource":
-            # Objective to deliver is set when transitioning to this step.
-            # Here, we just check the timer.
-            # agent.set_objective_deliver_resource(agent.config.DEFAULT_DELIVERY_TIME) # REMOVED: Objective set on transition
-
-            agent.delivery_timer -= dt
-            if agent.delivery_timer <= 0:
-                amount_to_deliver = agent.current_inventory['quantity'] # Deliver whatever is in inventory for this resource type
-                if amount_to_deliver > 0 and agent.current_inventory['resource_type'] == self.resource_type_to_gather:
-                    # Use commit_reservation_to_storage
-                    delivered_qty = self.target_dropoff_ref.commit_reservation_to_storage(
-                        self.task_id,
-                        self.resource_type_to_gather,
-                        amount_to_deliver
-                    )
-                    
-                    if delivered_qty > 0:
-                        agent.current_inventory['quantity'] -= delivered_qty
-                        self.quantity_delivered += delivered_qty
-                        self.reserved_at_dropoff_quantity -= delivered_qty # Reduce active reservation
-                        print(f"Task {self.task_id}: Agent {agent.id} delivered {delivered_qty} {self.resource_type_to_gather.name}. Total delivered for task: {self.quantity_delivered}")
-                        if agent.current_inventory['quantity'] == 0:
-                            agent.current_inventory['resource_type'] = None
-                    else:
-                        self.error_message = f"Failed to deliver {amount_to_deliver} to {self.target_dropoff_ref.position} despite reservation."
-                        # This is a critical error if reservation was in place.
-                        self.status = TaskStatus.FAILED
-                        return self.status
-                
-                # Check if task is complete
-                if self.quantity_delivered >= self.quantity_to_gather:
-                    self.status = TaskStatus.COMPLETED
-                elif agent.inventory_capacity == 0 and self.quantity_gathered < self.quantity_to_gather : # Agent delivered all it could carry, but task needs more
-                    # Go back to gather more if task not complete and agent has capacity
-                    # This requires re-claiming node if released, re-reserving space if needed.
-                    # For simplicity now, if one cycle doesn't complete, it might need a new task or more complex logic.
-                    # Current logic: one gather -> one deliver. If more is needed, this task might end and a new one created.
-                    # Or, _current_step_key goes back to "move_to_resource" if node still valid and space can be reserved.
-                    # This part needs careful design for multi-trip tasks.
-                    # For now, let's assume if what was gathered is delivered, and task not met, it's a FAILED or needs more complex state.
-                    # A simpler model: a task is for ONE trip. TaskManager makes more tasks.
-                    # If we assume task is for ONE trip up to agent capacity or reservation:
-                    self.status = TaskStatus.COMPLETED # Completed this trip. TaskManager can check if overall goal met.
-                else:
-                    # Still items in inventory but task not complete (should not happen if delivered all)
-                    # Or, task requires more but agent is empty (handled above)
-                    # If task is not complete, but agent is empty, it means this "trip" is done.
-                    self.status = TaskStatus.COMPLETED # This specific gather-deliver cycle is done.
-                                                     # TaskManager might need to issue a new task if overall goal not met.
-
-            return self.status
+        # With the new Intent system, execute_step becomes much simpler.
+        # The primary logic for advancing the task will be in on_intent_outcome.
+        # This method mainly just returns the current status.
+        # If there are active intents, the task is considered in progress.
         
-        return self.status # Should not be reached if steps are exhaustive
+        if not self.target_resource_node_ref or not self.target_dropoff_ref:
+            if self.status not in [TaskStatus.FAILED, TaskStatus.COMPLETED, TaskStatus.CANCELLED]:
+                self.error_message = "Target resource or dropoff became invalid during execution (execute_step check)."
+                self.status = TaskStatus.FAILED
+            return self.status
+
+        # If the task is PENDING or PREPARING, it shouldn't be in execute_step yet.
+        # If it's COMPLETED, FAILED, or CANCELLED, it should also not be here.
+        # So, if we are here, it's likely IN_PROGRESS (or one of its sub-statuses).
+        # The actual state transitions happen in on_intent_outcome.
+        
+        # print(f"Task {self.task_id} execute_step. Current status: {self.status.name}, Step key: {self._current_step_key}, Active Intents: {len(self.active_intents)}")
+        return self.status
+
 
     def cleanup(self, agent: 'Agent', resource_manager: 'ResourceManager', success: bool):
         self._update_timestamp()
@@ -375,6 +256,141 @@ class GatherAndDeliverTask(Task):
         elif self.status == TaskStatus.PREPARING:
             return f"Preparing to gather {self.resource_type_to_gather.name}"
         return f"Gather/Deliver {self.resource_type_to_gather.name} (Status: {self.status.name})"
+
+    def on_intent_outcome(self, agent: 'Agent', intent_id: uuid.UUID, intent_status: IntentStatus, resource_manager: 'ResourceManager'):
+        self._update_timestamp()
+        print(f"Task {self.task_id} (GatherAndDeliverTask) received outcome for intent {intent_id} ({agent.current_intent.get_description() if agent.current_intent and agent.current_intent.intent_id == intent_id else 'Intent Mismatch or Cleared'}): {intent_status.name}") # type: ignore
+        
+        original_intent_description = "Unknown Intent"
+        if agent.current_intent and agent.current_intent.intent_id == intent_id: # Should be the case
+            original_intent_description = agent.current_intent.get_description()
+
+        if intent_id in self.active_intents:
+            self.active_intents.remove(intent_id)
+        else:
+            print(f"Warning: Task {self.task_id} received outcome for an untracked or already removed intent {intent_id}.")
+            # Potentially an issue if an intent completes/fails after task already moved on or failed for other reasons.
+
+        if self.status in [TaskStatus.FAILED, TaskStatus.COMPLETED, TaskStatus.CANCELLED]:
+            print(f"Task {self.task_id} is already in a terminal state ({self.status.name}). Ignoring intent outcome for {intent_id}.")
+            return
+
+        if intent_status == IntentStatus.FAILED:
+            self.status = TaskStatus.FAILED
+            self.error_message = f"Intent {intent_id} ({original_intent_description}) failed. Task Error: {agent.current_intent.error_message if agent.current_intent and agent.current_intent.intent_id == intent_id else 'N/A'}" # type: ignore
+            print(f"Task {self.task_id} FAILED due to failed intent {intent_id}. Error: {self.error_message}")
+            return
+
+        if intent_status == IntentStatus.CANCELLED:
+            self.status = TaskStatus.FAILED # Or CANCELLED if we want to distinguish
+            self.error_message = f"Intent {intent_id} ({original_intent_description}) was cancelled."
+            print(f"Task {self.task_id} FAILED due to cancelled intent {intent_id}.")
+            return
+
+        # --- Intent COMPLETED Logic ---
+        if intent_status == IntentStatus.COMPLETED:
+            if self._current_step_key == "move_to_resource":
+                print(f"Task {self.task_id}: MoveIntent to resource node completed.")
+                self._current_step_key = "gather_resource"
+                self.status = TaskStatus.IN_PROGRESS_GATHERING
+                if not self.target_resource_node_ref: # Should not happen
+                    self.status = TaskStatus.FAILED; self.error_message = "target_resource_node_ref is None before gather intent"; return
+                
+                gather_intent = InteractAtTargetIntent(
+                    target_id=self.target_resource_node_ref.id, # type: ignore
+                    interaction_type="GATHER_RESOURCE",
+                    duration=agent.config.DEFAULT_GATHERING_TIME
+                )
+                self._submit_intent_to_agent(agent, gather_intent)
+
+            elif self._current_step_key == "gather_resource":
+                print(f"Task {self.task_id}: InteractAtTargetIntent (GATHER_RESOURCE) completed.")
+                # Perform actual resource collection logic here
+                if not self.target_resource_node_ref or not self.target_dropoff_ref: # Should not happen
+                     self.status = TaskStatus.FAILED; self.error_message = "target_resource_node_ref or target_dropoff_ref is None after gather intent"; return
+
+                can_carry_more = agent.inventory_capacity - agent.current_inventory.get('quantity', 0)
+                amount_to_attempt_gather = min(
+                    can_carry_more,
+                    self.reserved_at_dropoff_quantity,
+                    self.quantity_to_gather - self.quantity_gathered
+                )
+                if amount_to_attempt_gather > 0:
+                    gathered = self.target_resource_node_ref.collect_resource(amount_to_attempt_gather)
+                    if gathered > 0:
+                        if agent.current_inventory.get('resource_type') is None or agent.current_inventory.get('resource_type') == self.resource_type_to_gather:
+                            agent.current_inventory['resource_type'] = self.resource_type_to_gather
+                            agent.current_inventory['quantity'] = agent.current_inventory.get('quantity', 0) + gathered # type: ignore
+                            self.quantity_gathered += gathered
+                            print(f"Task {self.task_id}: Agent {agent.id} inventory: {agent.current_inventory['quantity']} of {self.resource_type_to_gather.name}. Task gathered: {self.quantity_gathered}")
+                        else:
+                            self.status = TaskStatus.FAILED; self.error_message = "Agent inventory type mismatch during gather."; return
+                    # else: Node might be empty, or couldn't collect. This might be an error or just 0 gathered.
+                
+                # Transition to moving to dropoff
+                self._current_step_key = "move_to_dropoff"
+                self.status = TaskStatus.IN_PROGRESS_MOVE_TO_DROPOFF
+                move_to_dropoff_intent = MoveIntent(self.target_dropoff_ref.position)
+                self._submit_intent_to_agent(agent, move_to_dropoff_intent)
+
+                if self.target_resource_node_ref and (self.quantity_gathered >= self.quantity_to_gather or self.target_resource_node_ref.current_quantity < 1):
+                    if self.reserved_at_node:
+                         self.target_resource_node_ref.release(agent.id, self.task_id)
+                         self.reserved_at_node = False
+
+            elif self._current_step_key == "move_to_dropoff":
+                print(f"Task {self.task_id}: MoveIntent to dropoff completed.")
+                self._current_step_key = "deliver_resource"
+                self.status = TaskStatus.IN_PROGRESS_DELIVERING
+                if not self.target_dropoff_ref: # Should not happen
+                    self.status = TaskStatus.FAILED; self.error_message = "target_dropoff_ref is None before deliver intent"; return
+
+                deliver_intent = InteractAtTargetIntent(
+                    target_id=self.target_dropoff_ref.id, # type: ignore
+                    interaction_type="DELIVER_RESOURCE",
+                    duration=agent.config.DEFAULT_DELIVERY_TIME
+                )
+                self._submit_intent_to_agent(agent, deliver_intent)
+
+            elif self._current_step_key == "deliver_resource":
+                print(f"Task {self.task_id}: InteractAtTargetIntent (DELIVER_RESOURCE) completed.")
+                if not self.target_dropoff_ref: # Should not happen
+                     self.status = TaskStatus.FAILED; self.error_message = "target_dropoff_ref is None after deliver intent"; return
+
+                amount_to_deliver = agent.current_inventory.get('quantity', 0)
+                if amount_to_deliver > 0 and agent.current_inventory.get('resource_type') == self.resource_type_to_gather:
+                    delivered_qty = self.target_dropoff_ref.commit_reservation_to_storage(
+                        self.task_id, self.resource_type_to_gather, amount_to_deliver
+                    )
+                    if delivered_qty > 0:
+                        agent.current_inventory['quantity'] = agent.current_inventory.get('quantity', 0) - delivered_qty # type: ignore
+                        self.quantity_delivered += delivered_qty
+                        self.reserved_at_dropoff_quantity -= delivered_qty
+                        print(f"Task {self.task_id}: Agent {agent.id} delivered {delivered_qty}. Task delivered: {self.quantity_delivered}. Agent inv: {agent.current_inventory['quantity']}")
+                        if agent.current_inventory.get('quantity', 0) == 0:
+                            agent.current_inventory['resource_type'] = None
+                    else:
+                        self.status = TaskStatus.FAILED; self.error_message = "Failed to commit delivery to storage despite reservation."; return
+                
+                if self.quantity_delivered >= self.quantity_to_gather:
+                    self.status = TaskStatus.COMPLETED
+                    print(f"Task {self.task_id} COMPLETED.")
+                else:
+                    # For a single-trip task, if delivery happened but goal not met, it's effectively done for this cycle.
+                    # More complex logic for multi-trip would go here (e.g., loop back to move_to_resource if possible)
+                    self.status = TaskStatus.COMPLETED # Assuming one-trip completion for now
+                    print(f"Task {self.task_id} COMPLETED (one-trip assumption, delivered {self.quantity_delivered}/{self.quantity_to_gather}).")
+            else:
+                print(f"Warning: Task {self.task_id} completed intent {intent_id} in unhandled step: {self._current_step_key}")
+        
+        # If no active intents and task not yet terminal, something might be wrong or it's a task that completes without intents.
+        if not self.active_intents and self.status not in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED]:
+            # This might indicate the task logic in on_intent_outcome needs to set a final status
+            # or that it's a type of task that doesn't use intents after a certain point.
+            # For GatherAndDeliver, it should always end up in COMPLETED or FAILED via the above paths.
+            print(f"Task {self.task_id} has no active intents but not in terminal state. Current step: {self._current_step_key}, Status: {self.status.name}")
+
+
 # TaskType.PROCESS_RESOURCE will be used for this.
 class DeliverWheatToMillTask(Task):
     """
@@ -463,150 +479,27 @@ class DeliverWheatToMillTask(Task):
             return False
 
         # If all preparations are successful:
+        if not self.target_storage_ref: # Should have been caught
+            self.status = TaskStatus.FAILED
+            self.error_message = "target_storage_ref is None in prepare for DeliverWheatToMillTask."
+            return False
+
+        move_to_storage_intent = MoveIntent(self.target_storage_ref.position)
+        self._submit_intent_to_agent(agent, move_to_storage_intent)
+
         self.status = TaskStatus.IN_PROGRESS_MOVE_TO_STORAGE
         self._current_step_key = "move_to_storage"
-        agent.set_objective_move_to_storage(self.target_storage_ref.position)
-        print(f"Task {self.task_id} (DeliverWheatToMill) PREPARED for agent {agent.id}. Target Storage: {self.target_storage_ref.position}, Target Mill: {self.target_processor_ref.position}, Reserved Pickup Qty: {self.reserved_at_storage_for_pickup_quantity}")
+        
+        print(f"Task {self.task_id} (DeliverWheatToMill) PREPARED for agent {agent.id}. Submitted MoveIntent to Storage: {self.target_storage_ref.position}. Reserved Pickup Qty: {self.reserved_at_storage_for_pickup_quantity}")
         return True
 
     def execute_step(self, agent: 'Agent', dt: float, resource_manager: 'ResourceManager') -> TaskStatus:
         self._update_timestamp()
-
+        # Logic moves to on_intent_outcome
         if not self.target_storage_ref or not self.target_processor_ref:
-            self.error_message = "Target storage or processor became invalid during execution."
-            self.status = TaskStatus.FAILED
-            return self.status
-
-        # --- Step: Move to StoragePoint ---
-        if self._current_step_key == "move_to_storage":
-            # Agent's objective (and state) was set to MOVING_TO_STORAGE in prepare() or transition.
-            if agent.state == AgentState.MOVING_TO_STORAGE:
-                return self.status # IN_PROGRESS_MOVE_TO_STORAGE
-            elif agent.state == AgentState.IDLE:
-                if self.target_storage_ref and \
-                   agent.position.distance_to(self.target_storage_ref.position) < agent.target_tolerance:
-                    # Movement successful: Agent is at the storage point
-                    self._current_step_key = "collect_from_storage"
-                    self.status = TaskStatus.IN_PROGRESS_COLLECTING_FROM_STORAGE
-                    agent.set_objective_collect_from_storage(getattr(agent.config, "DEFAULT_COLLECTION_TIME_FROM_STORAGE", agent.config.DEFAULT_GATHERING_TIME))
-                    print(f"Task {self.task_id}: Agent {agent.id} reached storage for pickup. Starting collection.")
-                else:
-                    # Movement failed
-                    self.error_message = f"Agent {agent.id} failed to reach storage for pickup at {self.target_storage_ref.position if self.target_storage_ref else 'None'}. Current pos: {agent.position}, State: {agent.state}"
-                    print(self.error_message)
-                    self.status = TaskStatus.FAILED
-            elif agent.state not in [AgentState.MOVING_TO_STORAGE, AgentState.GATHERING_RESOURCE]: # GATHERING_RESOURCE is used for collecting from storage
-                self.error_message = f"Agent {agent.id} in unexpected state {agent.state} during MOVING_TO_STORAGE (for pickup) phase for task {self.task_id}."
-                print(self.error_message)
+            if self.status not in [TaskStatus.FAILED, TaskStatus.COMPLETED, TaskStatus.CANCELLED]:
+                self.error_message = "Target storage or processor became invalid during execution (execute_step check)."
                 self.status = TaskStatus.FAILED
-            return self.status
-
-        # --- Step: Collect from StoragePoint ---
-        elif self._current_step_key == "collect_from_storage":
-            # Agent's gathering_timer (reused for collection) ticks down in agent.update()
-            if agent.gathering_timer <= 0:
-                can_carry_more = agent.inventory_capacity - agent.current_inventory['quantity']
-                
-                # Amount to collect is what was reserved for pickup for this task, up to what agent can carry
-                amount_to_attempt_collect = min(
-                    can_carry_more,
-                    self.reserved_at_storage_for_pickup_quantity - self.quantity_retrieved # what's left of our reservation
-                )
-
-                if amount_to_attempt_collect > 0:
-                    collected_qty = self.target_storage_ref.collect_reserved_pickup(
-                        self.task_id, 
-                        self.resource_to_retrieve, 
-                        amount_to_attempt_collect
-                    )
-                    
-                    if collected_qty > 0:
-                        if agent.current_inventory['resource_type'] is None or agent.current_inventory['resource_type'] == self.resource_to_retrieve:
-                            agent.current_inventory['resource_type'] = self.resource_to_retrieve
-                            agent.current_inventory['quantity'] += collected_qty
-                            self.quantity_retrieved += collected_qty
-                            # self.reserved_at_storage_for_pickup_quantity -= collected_qty # This is handled by collect_reserved_pickup
-                            print(f"Task {self.task_id}: Agent {agent.id} collected {collected_qty} {self.resource_to_retrieve.name} from storage. Total retrieved for task: {self.quantity_retrieved}")
-                        else:
-                            self.error_message = "Agent inventory has different resource type during collection from storage."
-                            self.status = TaskStatus.FAILED
-                            return self.status
-                    elif collected_qty == 0 and amount_to_attempt_collect > 0 : # Attempted to collect but got nothing
-                         self.error_message = f"Failed to collect reserved {self.resource_to_retrieve.name} from storage {self.target_storage_ref.position}."
-                         self.status = TaskStatus.FAILED # Or retry logic
-                         return self.status
-
-                # Transition to moving to mill if enough retrieved or agent full
-                # This task assumes one trip from storage to mill.
-                if self.quantity_retrieved > 0: # If anything was collected
-                    self._current_step_key = "move_to_mill"
-                    self.status = TaskStatus.IN_PROGRESS_MOVE_TO_PROCESSOR
-                    agent.set_objective_move_to_processor(self.target_processor_ref.position)
-                elif self.reserved_at_storage_for_pickup_quantity <= self.quantity_retrieved : # Reservation exhausted or met
-                     self.error_message = f"Reservation for {self.resource_to_retrieve.name} at storage {self.target_storage_ref.position} exhausted before collecting anything for agent."
-                     self.status = TaskStatus.FAILED # Failed to get anything useful
-                     return self.status
-
-            return self.status
-
-        # --- Step: Move to Mill ---
-        elif self._current_step_key == "move_to_mill":
-            # Agent's objective (and state) was set to MOVING_TO_PROCESSOR when transitioning.
-            if agent.state == AgentState.MOVING_TO_PROCESSOR:
-                return self.status # IN_PROGRESS_MOVE_TO_PROCESSOR
-            elif agent.state == AgentState.IDLE:
-                if self.target_processor_ref and \
-                   agent.position.distance_to(self.target_processor_ref.position) < agent.target_tolerance:
-                    # Movement successful: Agent is at the mill
-                    self._current_step_key = "deliver_to_mill"
-                    self.status = TaskStatus.IN_PROGRESS_DELIVERING_TO_PROCESSOR
-                    agent.set_objective_deliver_to_processor(agent.config.DEFAULT_DELIVERY_TIME)
-                    print(f"Task {self.task_id}: Agent {agent.id} reached mill. Starting to deliver.")
-                else:
-                    # Movement failed
-                    self.error_message = f"Agent {agent.id} failed to reach mill at {self.target_processor_ref.position if self.target_processor_ref else 'None'}. Current pos: {agent.position}, State: {agent.state}"
-                    print(self.error_message)
-                    self.status = TaskStatus.FAILED
-            elif agent.state not in [AgentState.MOVING_TO_PROCESSOR, AgentState.DELIVERING_TO_PROCESSOR]: # Agent in an unexpected state
-                self.error_message = f"Agent {agent.id} in unexpected state {agent.state} during MOVING_TO_MILL phase for task {self.task_id}."
-                print(self.error_message)
-                self.status = TaskStatus.FAILED
-            return self.status
-
-        # --- Step: Deliver to Mill ---
-        elif self._current_step_key == "deliver_to_mill":
-            # Agent's delivery_timer ticks down in agent.update()
-            if agent.delivery_timer <= 0:
-                amount_to_deliver = agent.current_inventory['quantity']
-                if amount_to_deliver > 0 and agent.current_inventory['resource_type'] == self.resource_to_retrieve:
-                    # Mill's receive method
-                    delivered_qty = self.target_processor_ref.receive(self.resource_to_retrieve, amount_to_deliver)
-                    
-                    if delivered_qty > 0:
-                        agent.current_inventory['quantity'] -= delivered_qty
-                        self.quantity_delivered_to_processor += delivered_qty
-                        print(f"Task {self.task_id}: Agent {agent.id} delivered {delivered_qty} {self.resource_to_retrieve.name} to Mill. Total delivered: {self.quantity_delivered_to_processor}")
-                        if agent.current_inventory['quantity'] == 0:
-                            agent.current_inventory['resource_type'] = None
-                        
-                        # Task is complete once all retrieved items are delivered
-                        if self.quantity_delivered_to_processor >= self.quantity_retrieved:
-                            self.status = TaskStatus.COMPLETED
-                        # If agent delivered some but still has more (shouldn't happen if mill takes all),
-                        # or if mill couldn't take all, this task might need more complex logic or fail.
-                        # For now, assume mill takes what it can, and task completes if agent is empty.
-                        elif agent.current_inventory['quantity'] == 0 :
-                             self.status = TaskStatus.COMPLETED # Agent delivered all it had from this trip.
-                    else: # Mill did not accept anything
-                        self.error_message = f"Mill {self.target_processor_ref.position} failed to receive {amount_to_deliver} of {self.resource_to_retrieve.name}."
-                        self.status = TaskStatus.FAILED
-                        return self.status
-                elif amount_to_deliver == 0 : # Agent arrived at mill with nothing
-                     self.error_message = f"Agent arrived at mill with no {self.resource_to_retrieve.name} to deliver."
-                     self.status = TaskStatus.FAILED # Should have been caught earlier
-                     return self.status
-            return self.status
-        
         return self.status
 
     def cleanup(self, agent: 'Agent', resource_manager: 'ResourceManager', success: bool):
@@ -638,3 +531,123 @@ class DeliverWheatToMillTask(Task):
         elif self._current_step_key == "deliver_to_mill" and self.target_processor_ref:
             return f"Delivering {self.resource_to_retrieve.name} to Mill at {self.target_processor_ref.position}"
         return f"Process {self.resource_to_retrieve.name} (Status: {self.status.name})"
+
+    def on_intent_outcome(self, agent: 'Agent', intent_id: uuid.UUID, intent_status: IntentStatus, resource_manager: 'ResourceManager'):
+        self._update_timestamp()
+        original_intent_description = "Unknown Intent (DeliverWheat)"
+        # Try to get original intent description if agent still holds it, for logging
+        current_agent_intent = agent.current_intent
+        if current_agent_intent and current_agent_intent.intent_id == intent_id:
+            original_intent_description = current_agent_intent.get_description()
+
+        print(f"Task {self.task_id} (DeliverWheatToMillTask) received outcome for intent {intent_id} ({original_intent_description}): {intent_status.name}")
+        
+        if intent_id in self.active_intents:
+            self.active_intents.remove(intent_id)
+        else:
+            print(f"Warning: Task {self.task_id} (DeliverWheatToMillTask) received outcome for an untracked intent {intent_id}.")
+
+        if self.status in [TaskStatus.FAILED, TaskStatus.COMPLETED, TaskStatus.CANCELLED]:
+            print(f"Task {self.task_id} (DeliverWheatToMillTask) is already terminal ({self.status.name}). Ignoring outcome for {intent_id}.")
+            return
+
+        if intent_status == IntentStatus.FAILED:
+            self.status = TaskStatus.FAILED
+            err_msg = "N/A"
+            if current_agent_intent and current_agent_intent.intent_id == intent_id and current_agent_intent.error_message:
+                err_msg = current_agent_intent.error_message
+            self.error_message = f"Intent {intent_id} ({original_intent_description}) failed for DeliverWheatToMillTask. Agent Error: {err_msg}"
+            print(f"Task {self.task_id} FAILED due to failed intent {intent_id}. Error: {self.error_message}")
+            return
+
+        if intent_status == IntentStatus.CANCELLED:
+            self.status = TaskStatus.FAILED
+            self.error_message = f"Intent {intent_id} ({original_intent_description}) was cancelled for DeliverWheatToMillTask."
+            print(f"Task {self.task_id} FAILED due to cancelled intent {intent_id}.")
+            return
+
+        # --- Intent COMPLETED Logic for DeliverWheatToMillTask ---
+        if intent_status == IntentStatus.COMPLETED:
+            if not self.target_storage_ref or not self.target_processor_ref:
+                 self.status = TaskStatus.FAILED; self.error_message = "Target refs are None in on_intent_outcome."; return
+
+            if self._current_step_key == "move_to_storage":
+                print(f"Task {self.task_id}: MoveIntent to storage completed.")
+                self._current_step_key = "collect_from_storage"
+                self.status = TaskStatus.IN_PROGRESS_COLLECTING_FROM_STORAGE
+                collection_time = getattr(agent.config, "DEFAULT_COLLECTION_TIME_FROM_STORAGE", agent.config.DEFAULT_GATHERING_TIME)
+                collect_intent = InteractAtTargetIntent(
+                    target_id=self.target_storage_ref.id, # type: ignore
+                    interaction_type="COLLECT_FROM_STORAGE",
+                    duration=collection_time
+                )
+                self._submit_intent_to_agent(agent, collect_intent)
+
+            elif self._current_step_key == "collect_from_storage":
+                print(f"Task {self.task_id}: InteractAtTargetIntent (COLLECT_FROM_STORAGE) completed.")
+                can_carry_more = agent.inventory_capacity - agent.current_inventory.get('quantity', 0)
+                amount_to_attempt_collect = min(
+                    can_carry_more,
+                    self.reserved_at_storage_for_pickup_quantity - self.quantity_retrieved
+                )
+                if amount_to_attempt_collect > 0:
+                    collected_qty = self.target_storage_ref.collect_reserved_pickup(
+                        self.task_id, self.resource_to_retrieve, amount_to_attempt_collect
+                    )
+                    if collected_qty > 0:
+                        if agent.current_inventory.get('resource_type') is None or agent.current_inventory.get('resource_type') == self.resource_to_retrieve:
+                            agent.current_inventory['resource_type'] = self.resource_to_retrieve
+                            agent.current_inventory['quantity'] = agent.current_inventory.get('quantity', 0) + collected_qty # type: ignore
+                            self.quantity_retrieved += collected_qty
+                            print(f"Task {self.task_id}: Agent collected {collected_qty} {self.resource_to_retrieve.name}. Agent inv: {agent.current_inventory['quantity']}")
+                        else:
+                            self.status = TaskStatus.FAILED; self.error_message = "Agent inv type mismatch during collect from storage."; return
+                    elif collected_qty == 0: # Failed to collect anything despite trying
+                         self.status = TaskStatus.FAILED; self.error_message = f"Failed to collect reserved {self.resource_to_retrieve.name} from storage."; return
+                
+                if self.quantity_retrieved > 0:
+                    self._current_step_key = "move_to_mill"
+                    self.status = TaskStatus.IN_PROGRESS_MOVE_TO_PROCESSOR
+                    move_to_mill_intent = MoveIntent(self.target_processor_ref.position) # type: ignore
+                    self._submit_intent_to_agent(agent, move_to_mill_intent)
+                else: # Nothing retrieved, or reservation exhausted before getting anything
+                    self.status = TaskStatus.FAILED; self.error_message = "No items retrieved from storage, or reservation issue."; return
+
+            elif self._current_step_key == "move_to_mill":
+                print(f"Task {self.task_id}: MoveIntent to mill completed.")
+                self._current_step_key = "deliver_to_mill"
+                self.status = TaskStatus.IN_PROGRESS_DELIVERING_TO_PROCESSOR
+                deliver_intent = InteractAtTargetIntent(
+                    target_id=self.target_processor_ref.id, # type: ignore
+                    interaction_type="DELIVER_TO_PROCESSOR",
+                    duration=agent.config.DEFAULT_DELIVERY_TIME
+                )
+                self._submit_intent_to_agent(agent, deliver_intent)
+
+            elif self._current_step_key == "deliver_to_mill":
+                print(f"Task {self.task_id}: InteractAtTargetIntent (DELIVER_TO_PROCESSOR) completed.")
+                amount_to_deliver = agent.current_inventory.get('quantity', 0)
+                if amount_to_deliver > 0 and agent.current_inventory.get('resource_type') == self.resource_to_retrieve:
+                    delivered_qty = self.target_processor_ref.receive(self.resource_to_retrieve, amount_to_deliver) # type: ignore
+                    if delivered_qty > 0:
+                        agent.current_inventory['quantity'] = agent.current_inventory.get('quantity', 0) - delivered_qty # type: ignore
+                        self.quantity_delivered_to_processor += delivered_qty
+                        print(f"Task {self.task_id}: Agent delivered {delivered_qty} to mill. Task delivered: {self.quantity_delivered_to_processor}. Agent inv: {agent.current_inventory['quantity']}")
+                        if agent.current_inventory.get('quantity', 0) == 0:
+                            agent.current_inventory['resource_type'] = None
+                        
+                        if self.quantity_delivered_to_processor >= self.quantity_retrieved:
+                            self.status = TaskStatus.COMPLETED
+                            print(f"Task {self.task_id} (DeliverWheatToMillTask) COMPLETED.")
+                        elif agent.current_inventory.get('quantity', 0) == 0 : # Delivered all it had
+                             self.status = TaskStatus.COMPLETED # Assuming one trip completes the task's goal for this specific load
+                             print(f"Task {self.task_id} (DeliverWheatToMillTask) COMPLETED (agent empty).")
+                    else:
+                        self.status = TaskStatus.FAILED; self.error_message = "Mill failed to receive items."; return
+                elif amount_to_deliver == 0:
+                     self.status = TaskStatus.FAILED; self.error_message = "Agent arrived at mill with no items to deliver."; return
+            else:
+                print(f"Warning: Task {self.task_id} (DeliverWheatToMillTask) completed intent {intent_id} in unhandled step: {self._current_step_key}")
+
+        if not self.active_intents and self.status not in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED]:
+            print(f"Task {self.task_id} (DeliverWheatToMillTask) has no active intents but not in terminal state. Step: {self._current_step_key}, Status: {self.status.name}")

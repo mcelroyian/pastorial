@@ -8,7 +8,13 @@ from src.core.logger import setup_logging # Added
 
 def main():
     """Initializes Pygame, creates the game window and runs the game loop."""
-    setup_logging() # Added
+    # Configure logging:
+    # - Default log level is INFO.
+    # - Set 'src.agents.agent' logger to DEBUG for more detailed agent logs.
+    per_module_log_levels = {
+        "src.agents.agent": logging.DEBUG
+    }
+    setup_logging(default_level=logging.INFO, per_module_levels=per_module_log_levels)
     logger = logging.getLogger(__name__) # Added
 
     try:
