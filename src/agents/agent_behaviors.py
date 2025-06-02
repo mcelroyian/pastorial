@@ -1,12 +1,12 @@
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Optional
 
-from .intents import Intent, IntentStatus # Assuming intents.py is in the same directory
+from .intents import Intent, IntentStatus, RandomMoveIntent # Assuming intents.py is in the same directory
 
 if TYPE_CHECKING:
     from .agent import Agent # To avoid circular import, for type hinting only
-    # from ..core.grid import Grid # If behaviors interact directly with grid
-    # from ..resources.manager import ResourceManager # If behaviors interact directly
+    from ..resources.manager import ResourceManager # If behaviors interact directly
+    # from ..core.grid import Grid # If behaviors interact directly
 
 class AgentBehavior(ABC):
     """Abstract base class for all agent behaviors (states in the State Pattern)."""
@@ -20,9 +20,12 @@ class AgentBehavior(ABC):
         pass
 
     @abstractmethod
-    def update(self, dt: float) -> Optional[IntentStatus]:
+    def update(self, dt: float, resource_manager: 'ResourceManager') -> Optional[IntentStatus]:
         """
         Called every frame to update the behavior.
+        Args:
+            dt (float): Delta time.
+            resource_manager (ResourceManager): Reference to the resource manager.
         Returns an IntentStatus if the current intent associated with this behavior
         has reached a terminal state (COMPLETED, FAILED).
         Returns None if the behavior is still ongoing.
@@ -49,11 +52,17 @@ class IdleBehavior(AgentBehavior):
         self.agent.final_destination = None
 
 
-    def update(self, dt: float) -> Optional[IntentStatus]:
+    def update(self, dt: float, resource_manager: 'ResourceManager') -> Optional[IntentStatus]:
         # In IdleBehavior, the agent might decide to look for tasks (which would be an intent itself)
         # or process a new intent if one is assigned.
         # For now, IdleBehavior itself doesn't complete an "intent".
         # The Agent's main loop will handle transitioning from Idle if a new intent arrives.
+        # It could transition to EvaluatingIntentBehavior if it needs to find work.
+        self.agent.logger.debug(f"Agent {self.agent.id} in IdleBehavior.update. Considering transition to EvaluatingIntentBehavior.")
+        # If an agent is truly idle, it should probably try to find something to do.
+        # This transition will be handled by the agent's main loop if a new intent is submitted,
+        # or if the agent decides to seek work (which would be a transition to EvaluatingIntentBehavior).
+        # For now, let's assume if it's in Idle, it means it has nothing and EvaluatingIntentBehavior will handle seeking.
         return None # Remains idle until agent logic transitions it
 
     def exit(self):
@@ -67,46 +76,82 @@ class MovingBehavior(AgentBehavior):
 
     def enter(self, intent: Optional[Intent] = None):
         self.agent.logger.debug(f"Agent {self.agent.id} entering MovingBehavior.")
-        if intent and hasattr(intent, 'target_position'):
+        if isinstance(intent, RandomMoveIntent):
+            self.move_intent = intent
+            # Pick a random target position
+            if self.agent.grid.width_in_cells > 0 and self.agent.grid.height_in_cells > 0:
+                random_target_x = self.agent.random.uniform(0, self.agent.grid.width_in_cells - 1)
+                random_target_y = self.agent.random.uniform(0, self.agent.grid.height_in_cells - 1)
+                target_pos = self.agent.pygame.math.Vector2(
+                    int(round(random_target_x)),
+                    int(round(random_target_y))
+                )
+                self.agent.logger.info(f"Agent {self.agent.id} MovingBehavior: RandomMoveIntent, generated target {target_pos}")
+                self.agent.set_target(target_pos)
+            else:
+                self.agent.logger.error(f"Agent {self.agent.id} MovingBehavior: RandomMoveIntent but grid is invalid. Cannot set target.")
+                self.agent.current_path = None # Ensure no path
+        elif intent and hasattr(intent, 'target_position'):
             self.move_intent = intent
             self.agent.set_target(intent.target_position) # type: ignore
-            if self.agent.current_path is None:
-                self.agent.logger.warning(f"Agent {self.agent.id} MovingBehavior: Pathfinding failed for intent {intent.intent_id} to {intent.target_position}.") # type: ignore
-                # This state should immediately signal failure for this intent.
-            else:
-                self.agent.logger.debug(f"Agent {self.agent.id} MovingBehavior: Path set for intent {intent.intent_id} to {intent.target_position}.") # type: ignore
         else:
-            self.agent.logger.error(f"Agent {self.agent.id} MovingBehavior: Entered without a valid MoveIntent or target_position.")
-            # This is an error condition, should probably lead to intent failure.
-            self.move_intent = None
+            self.agent.logger.error(f"Agent {self.agent.id} MovingBehavior: Entered without a valid MoveIntent or RandomMoveIntent.")
+            self.move_intent = None # Ensure it's None
+            self.agent.current_path = None # Ensure no path
+
+        if self.agent.current_path is None and self.move_intent: # Check if pathfinding failed for any type of move intent
+            self.agent.logger.warning(f"Agent {self.agent.id} MovingBehavior: Pathfinding failed for intent {self.move_intent.intent_id} (type: {type(self.move_intent)}).")
+            # Failure will be handled in update()
+        elif self.move_intent:
+            self.agent.logger.debug(f"Agent {self.agent.id} MovingBehavior: Path set for intent {self.move_intent.intent_id} (type: {type(self.move_intent)}).")
 
 
-    def update(self, dt: float) -> Optional[IntentStatus]:
+    def update(self, dt: float, resource_manager: 'ResourceManager') -> Optional[IntentStatus]:
+        if not self.move_intent: # Should have been set in enter()
+            self.agent.logger.error(f"Agent {self.agent.id} MovingBehavior: update called but no move_intent set.")
+            return IntentStatus.FAILED
+
+        # If pathfinding failed in enter() or path is otherwise None, and we are not already at a potential target
+        # (e.g. for RandomMoveIntent, target_position might not be set if grid was invalid)
         if not self.agent.current_path and not self.agent.target_position:
-            # Pathfinding might have failed in enter(), or path was unexpectedly cleared.
-            # If agent is already at the final destination of the intent, it's a success.
-            if self.move_intent and hasattr(self.move_intent, 'target_position'):
+            # For non-RandomMoveIntent, check if already at the specified target_position
+            if not isinstance(self.move_intent, RandomMoveIntent) and hasattr(self.move_intent, 'target_position'):
                 target_pos = getattr(self.move_intent, 'target_position')
                 if self.agent.position.distance_to(target_pos) < self.agent.target_tolerance:
                     self.agent.logger.debug(f"Agent {self.agent.id} MovingBehavior: Already at target {target_pos} for intent {self.move_intent.intent_id}. Path completed.")
                     return IntentStatus.COMPLETED
             
-            self.agent.logger.warning(f"Agent {self.agent.id} MovingBehavior: No path and not at target. Intent {self.move_intent.intent_id if self.move_intent else 'None'} failed.")
+            self.agent.logger.warning(f"Agent {self.agent.id} MovingBehavior: No path and not at target. Intent {self.move_intent.intent_id} failed.")
             return IntentStatus.FAILED
 
-        path_follow_result = self.agent._follow_path(dt) # _follow_path returns True if waypoint reached or path ended
+        # If there's a target_position (waypoint), try to follow path
+        if self.agent.target_position:
+            path_follow_result = self.agent._follow_path(dt) # _follow_path returns True if waypoint reached or path ended
 
-        if path_follow_result: # Waypoint reached
-            if not self.agent.current_path: # Path is now empty, meaning final destination reached
-                self.agent.logger.debug(f"Agent {self.agent.id} MovingBehavior: Path completed for intent {self.move_intent.intent_id if self.move_intent else 'None'}.")
-                return IntentStatus.COMPLETED
-        
-        # If path_follow_result is False, it means still moving towards current waypoint.
-        # If current_path exists but target_position is None (should not happen if _follow_path is robust)
-        if self.agent.current_path and self.agent.target_position is None:
-            self.agent.logger.error(f"Agent {self.agent.id} MovingBehavior: current_path exists but target_position is None. Critical error.")
-            return IntentStatus.FAILED
+            if path_follow_result: # Waypoint reached
+                if not self.agent.current_path: # Path is now empty, meaning final destination reached
+                    self.agent.logger.debug(f"Agent {self.agent.id} MovingBehavior: Path completed for intent {self.move_intent.intent_id}.")
+                    return IntentStatus.COMPLETED
             
+            # If path_follow_result is False, it means still moving towards current waypoint.
+            # If current_path exists but target_position is None (should not happen if _follow_path is robust)
+            if self.agent.current_path and self.agent.target_position is None:
+                self.agent.logger.error(f"Agent {self.agent.id} MovingBehavior: current_path exists but target_position is None. Critical error.")
+                return IntentStatus.FAILED
+        elif not self.agent.current_path: # No target_position and no current_path means we are likely done or failed to start
+             # This case handles if set_target resulted in an immediate completion (already at destination)
+             # or if RandomMoveIntent failed to set a target due to invalid grid.
+            if isinstance(self.move_intent, RandomMoveIntent):
+                 # If it was a RandomMoveIntent and we end up here without a path/target, it might have failed to generate one.
+                 self.agent.logger.warning(f"Agent {self.agent.id} MovingBehavior: RandomMoveIntent has no path/target in update. Assuming failure or completion if no error logged prior.")
+                 # If no error was logged during `enter` for RandomMoveIntent, it implies it might have considered itself at target.
+                 # However, a RandomMoveIntent should always try to move. If it can't set a path, it's a failure of that intent.
+                 return IntentStatus.FAILED # Or COMPLETED if it's a "do nothing" random move. Let's assume FAILED if no path.
+            else: # For specific MoveIntent, if no target_position and no path, it's likely completed.
+                 self.agent.logger.debug(f"Agent {self.agent.id} MovingBehavior: No target_position and no current_path for intent {self.move_intent.intent_id}. Assuming completed.")
+                 return IntentStatus.COMPLETED
+
+
         return None # Still actively moving or waiting for next update cycle
 
     def exit(self):
@@ -139,7 +184,7 @@ class InteractingBehavior(AgentBehavior):
             self.agent.logger.error(f"Agent {self.agent.id} InteractingBehavior: Entered without a valid InteractAtTargetIntent or duration. Intent was: {intent}")
             self.timer = -1 # Force immediate failure in update
 
-    def update(self, dt: float) -> Optional[IntentStatus]:
+    def update(self, dt: float, resource_manager: 'ResourceManager') -> Optional[IntentStatus]:
         if self.timer < 0: # Invalid setup
             return IntentStatus.FAILED
 
@@ -166,7 +211,7 @@ class PathFailedBehavior(AgentBehavior):
             # The agent itself might have a cooldown or retry logic here,
             # but for now, this behavior just signals the intent has failed.
 
-    def update(self, dt: float) -> Optional[IntentStatus]:
+    def update(self, dt: float, resource_manager: 'ResourceManager') -> Optional[IntentStatus]:
         # This state immediately signals the failure of the intent that led to it.
         # The agent's IntentProcessor would then decide what to do next (e.g., go idle, try alternative).
         return IntentStatus.FAILED
@@ -181,15 +226,25 @@ class EvaluatingIntentBehavior(AgentBehavior):
         # This behavior is more of a transient state for the agent's internal logic
         # to decide the next concrete action behavior based on the current_intent.
 
-    def update(self, dt: float) -> Optional[IntentStatus]:
-        # The actual logic for evaluating/dispatching intents will reside in the Agent class.
-        # This behavior might not directly complete an intent itself but trigger
-        # the agent to transition to another behavior (e.g., MovingBehavior if intent is MoveIntent).
-        # If there's no current intent, it might trigger looking for new tasks.
-        # For now, let's assume the agent's main update loop handles this transition.
-        # This behavior itself doesn't have a "completion" status for an intent.
-        self.agent.logger.debug(f"Agent {self.agent.id} EvaluatingIntentBehavior: Update called. Agent should process its current_intent.")
-        return None # Agent's main logic will transition out of this.
+    def update(self, dt: float, resource_manager: 'ResourceManager') -> Optional[IntentStatus]:
+        self.agent.logger.debug(f"Agent {self.agent.id} EvaluatingIntentBehavior: Update called.")
+        if self.agent.current_intent and self.agent.current_intent.status == IntentStatus.PENDING:
+            self.agent.logger.debug(f"Agent {self.agent.id} EvaluatingIntentBehavior: Found PENDING intent {self.agent.current_intent.intent_id}. Calling _process_current_intent.")
+            self.agent._process_current_intent() # Agent transitions to another behavior
+        elif not self.agent.current_intent:
+            self.agent.logger.debug(f"Agent {self.agent.id} EvaluatingIntentBehavior: No current intent. Calling acquire_task_or_perform_idle_action.")
+            # This call might result in a new intent being submitted, which will be processed in the next cycle
+            # or by an immediate transition if acquire_task_or_perform_idle_action itself calls submit_intent and _process_current_intent.
+            # For now, assume it might submit an intent that becomes PENDING.
+            self.agent.acquire_task_or_perform_idle_action(dt, resource_manager)
+        else:
+            # Intent exists but is not PENDING (e.g., ACTIVE, COMPLETED, FAILED).
+            # This behavior's job is done for such intents; agent's main loop handles outcomes.
+            # Or, if an intent was just completed/failed, agent should have transitioned here,
+            # and current_intent might have been cleared or replaced.
+            self.agent.logger.debug(f"Agent {self.agent.id} EvaluatingIntentBehavior: current_intent exists but not PENDING (Status: {self.agent.current_intent.status.name}). No action by behavior.")
+
+        return None # This behavior itself doesn't complete an intent; it facilitates processing or acquisition.
 
     def exit(self):
         self.agent.logger.debug(f"Agent {self.agent.id} exiting EvaluatingIntentBehavior.")

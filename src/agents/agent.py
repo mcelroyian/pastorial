@@ -11,8 +11,8 @@ from ..core import config
 from ..tasks.task import GatherAndDeliverTask, DeliverWheatToMillTask
 from ..tasks.task_types import TaskStatus, TaskType
 from ..pathfinding.astar import find_path
-from .agent_defs import AgentState # Kept for now for fallback logic
-from .intents import Intent, IntentStatus, MoveIntent, GatherIntent, DeliverIntent, InteractAtTargetIntent
+# from .agent_defs import AgentState # Kept for now for fallback logic - REMOVING
+from .intents import Intent, IntentStatus, MoveIntent, GatherIntent, DeliverIntent, InteractAtTargetIntent, RandomMoveIntent
 from .agent_behaviors import AgentBehavior, IdleBehavior, MovingBehavior, InteractingBehavior, PathFailedBehavior, EvaluatingIntentBehavior
 
 
@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from ..tasks.task import Task
     from ..tasks.task_manager import TaskManager
     from ..resources.manager import ResourceManager
+    from ..tasks.task import Task # For type hinting current_task if kept temporarily
     # from ..core.grid import Grid
     # from .intents import Intent # Already imported above
     # from .agent_behaviors import AgentBehavior # Already imported above
@@ -55,24 +56,14 @@ class Agent:
         self.task_manager_ref: 'TaskManager' = task_manager
         self.config = config
         self.logger = logging.getLogger(__name__)
+        self.random = random # For random decisions, e.g. RandomMoveIntent target
+        self.pygame = pygame # For Vector2, etc.
 
-        # --- Old State System (kept for fallback during transition) ---
-        self.state = AgentState.IDLE
-        self._old_state_colors = { # Renamed to avoid conflict if new system uses state_colors
-            AgentState.IDLE: (255, 255, 0),
-            AgentState.MOVING_RANDOMLY: (255, 165, 0),
-            AgentState.MOVING_TO_RESOURCE: (0, 200, 50),
-            AgentState.GATHERING_RESOURCE: (50, 150, 255),
-            AgentState.MOVING_TO_STORAGE: (0, 200, 200),
-            AgentState.DELIVERING_RESOURCE: (100, 100, 255),
-            AgentState.MOVING_TO_PROCESSOR: (255, 140, 0),
-            AgentState.DELIVERING_TO_PROCESSOR: (138, 43, 226),
-            AgentState.COLLECTING_FROM_PROCESSOR: (0, 128, 128),
-            AgentState.EVALUATING_TASKS: (200, 200, 200),
-        }
-        # Timers for old system, will be removed later
-        self.gathering_timer: float = 0.0
-        self.delivery_timer: float = 0.0
+        # --- Old State System (REMOVED) ---
+        # self.state = AgentState.IDLE # REMOVED
+        # self._old_state_colors = { ... } # REMOVED
+        # self.gathering_timer: float = 0.0 # REMOVED
+        # self.delivery_timer: float = 0.0 # REMOVED
         # --- End Old State System ---
 
         # --- New Behavior/Intent System ---
@@ -95,8 +86,8 @@ class Agent:
         self.final_destination: Optional[pygame.math.Vector2] = None # Ultimate goal of a movement sequence (used by set_target)
         
         self.target_tolerance = 0.1
-        self.task_evaluation_cooldown = 1.0 # Seconds before trying to evaluate tasks again if none found (for old system)
-        self._last_task_evaluation_time = 0.0
+        # self.task_evaluation_cooldown = 1.0 # REMOVED - Was for old system
+        # self._last_task_evaluation_time = 0.0 # REMOVED
 
         self.inventory_capacity: int = inventory_capacity
         self.current_inventory: Dict[str, Optional[ResourceType] | int] = { # type: ignore
@@ -104,7 +95,7 @@ class Agent:
             'quantity': 0
         }
         
-        self.current_task: Optional['Task'] = None # Task currently assigned (old system context)
+        # self.current_task: Optional['Task'] = None # REMOVED - Old system context
         self.resource_priorities: Optional[List[ResourceType]] = resource_priorities
         
         # Initialize the first behavior after all attributes are set
@@ -144,14 +135,13 @@ class Agent:
         intent_type = type(self.current_intent)
         self.logger.debug(f"Agent {self.id} _process_current_intent: Intent type determined as {intent_type}")
 
-        if intent_type == MoveIntent:
-            self.logger.debug(f"Agent {self.id} _process_current_intent: Matched MoveIntent. Transitioning to MovingBehavior.")
+        if intent_type == MoveIntent or intent_type == RandomMoveIntent:
+            self.logger.debug(f"Agent {self.id} _process_current_intent: Matched MoveIntent or RandomMoveIntent. Transitioning to MovingBehavior.")
             self._transition_behavior(MovingBehavior, self.current_intent)
         elif intent_type == GatherIntent or intent_type == DeliverIntent or intent_type == InteractAtTargetIntent:
+            # Note: GatherIntent and DeliverIntent might be phased out in favor of tasks submitting
+            # sequences of MoveIntent and InteractAtTargetIntent.
             self.logger.debug(f"Agent {self.id} _process_current_intent: Matched Gather/Deliver/InteractAtTargetIntent group. Current intent actual type: {type(self.current_intent)}")
-            # These could map to InteractingBehavior, which would then use intent details
-            # For now, assuming InteractAtTargetIntent is used for the timed part of gathering/delivering.
-            # GatherIntent/DeliverIntent might need specific logic if they are not just timers.
             if isinstance(self.current_intent, (GatherIntent, DeliverIntent, InteractAtTargetIntent)):
                  self.logger.debug(f"Agent {self.id} _process_current_intent: isinstance check PASSED for InteractingBehavior. Transitioning to InteractingBehavior with intent: {self.current_intent}")
                  self._transition_behavior(InteractingBehavior, self.current_intent)
@@ -160,14 +150,13 @@ class Agent:
                  if self.current_intent: # Check if current_intent is not None before accessing status
                     self.current_intent.status = IntentStatus.FAILED
                     self.current_intent.error_message = f"Agent cannot handle intent type {intent_type} (isinstance failed)"
-                 self._transition_behavior(IdleBehavior) # Fallback
-        # Add more intent types here (e.g., specific gather, deliver behaviors if needed)
+                 self._transition_behavior(IdleBehavior) # Fallback to Idle
         else:
             self.logger.warning(f"Agent {self.id}: Unknown intent type {intent_type}. Intent: {self.current_intent}. Transitioning to IdleBehavior.")
             if self.current_intent: # Check if current_intent is not None
                 self.current_intent.status = IntentStatus.FAILED
                 self.current_intent.error_message = f"Unknown intent type: {intent_type}"
-            self._transition_behavior(IdleBehavior) # Fallback
+            self._transition_behavior(IdleBehavior) # Fallback to Idle
 
     def _transition_behavior(self, new_behavior_class_or_instance, intent_for_behavior: Optional[Intent] = None):
         """Helper method to transition between behaviors."""
@@ -183,53 +172,49 @@ class Agent:
         self.logger.info(f"Agent {self.id} transitioned to behavior: {self.current_behavior} for intent: {intent_for_behavior.intent_id if intent_for_behavior else 'None'}")
         self.current_behavior.enter(intent_for_behavior if intent_for_behavior else self.current_intent)
 
-    def _seek_new_work_or_fallback(self, dt: float, resource_manager: 'ResourceManager'):
-        """Placeholder for logic when agent is idle: find task or move randomly (old system)."""
-        self.logger.debug(f"Agent {self.id} is in _seek_new_work_or_fallback. Current behavior: {self.current_behavior}")
-        # This will eventually integrate with the task system to get new intents.
-        # For now, it might fall back to old EVALUATING_TASKS or MOVING_RANDOMLY logic.
-        
-        # Fallback to old logic for now if no current_intent and in Idle/EvaluatingIntent behavior
-        current_time = pygame.time.get_ticks() / 1000.0
-        if self.state == AgentState.IDLE:
-            self.logger.debug(f"Agent {self.id} (fallback): State IDLE, transitioning to EVALUATING_TASKS.")
-            self.set_objective_evaluating_tasks() # Old system
-            self._last_task_evaluation_time = current_time
-        
-        elif self.state == AgentState.EVALUATING_TASKS:
-            if current_time - self._last_task_evaluation_time >= self.task_evaluation_cooldown:
-                self.logger.debug(f"Agent {self.id} (fallback): State EVALUATING_TASKS. Cooldown passed. Fetching tasks.")
-                self._last_task_evaluation_time = current_time
-                available_tasks = self.task_manager_ref.get_available_tasks()
-                if available_tasks:
-                    chosen_task_obj = self._evaluate_and_select_task(available_tasks, resource_manager)
-                    if chosen_task_obj:
-                        claimed_task = self.task_manager_ref.attempt_claim_task(chosen_task_obj.task_id, self)
-                        if claimed_task:
-                            self.current_task = claimed_task
-                            self.logger.info(f"Agent {self.id} (fallback): Claimed task {claimed_task.task_id}. Preparing (old system).")
-                            # OLD WAY: task.prepare sets agent state.
-                            # NEW WAY (TODO): task.prepare should submit an intent.
-                            if not self.current_task.prepare(self, resource_manager):
-                                self.logger.warning(f"Agent {self.id} (fallback): Task {self.current_task.task_id} PREPARATION FAILED (old system).")
-                                self.task_manager_ref.report_task_outcome(self.current_task, TaskStatus.FAILED, self)
-                                if hasattr(self.current_task, 'cleanup'): self.current_task.cleanup(self, resource_manager, success=False)
-                                self.current_task = None
-                                self.set_objective_idle() # Old system
-                            else:
-                                self.logger.info(f"Agent {self.id} (fallback): Task {claimed_task.task_id} PREPARATION SUCCESSFUL (old system). Agent state is now {self.state.name}")
-                                # At this point, the old system's task.prepare() would have set self.state
-                                # and the agent would proceed with that.
-                        else: # Failed to claim
-                            self.set_objective_idle() # Old system
-                    else: # No suitable task
-                        self.set_objective_move_randomly() # Old system
-                else: # No tasks available
-                    self.set_objective_move_randomly() # Old system
-        elif self.state == AgentState.MOVING_RANDOMLY:
-             self._move_randomly(dt) # Old system
+    def acquire_task_or_perform_idle_action(self, dt: float, resource_manager: 'ResourceManager'):
+        """
+        Called by EvaluatingIntentBehavior when no current_intent exists.
+        Attempts to acquire a new task. If no task is found, may perform an idle action (e.g., random move).
+        """
+        self.logger.debug(f"Agent {self.id} attempting to acquire task or perform idle action.")
+
+        # Attempt to get a task assigned by the TaskManager.
+        # The TaskManager's assign_task_to_agent method will handle:
+        # - Finding a suitable task
+        # - Claiming it for the agent
+        # - Calling task.prepare(), which should submit the first intent.
+        task_assigned_and_prepared = self.task_manager_ref.assign_task_to_agent(self, resource_manager)
+
+        if task_assigned_and_prepared:
+            self.logger.info(f"Agent {self.id}: TaskManager assigned and prepared a task. Current intent should be set by task.prepare().")
+            # If assign_task_to_agent was successful, self.current_intent should have been set
+            # by the task's prepare() method calling self.submit_intent().
+            # EvaluatingIntentBehavior will pick this up in the next cycle or if _process_current_intent is called.
+            if self.current_intent and self.current_intent.status == IntentStatus.PENDING:
+                self._process_current_intent() # Process it immediately if PENDING
+            elif not self.current_intent:
+                self.logger.warning(f"Agent {self.id}: TaskManager.assign_task_to_agent reported success, but no current_intent was set by task.prepare(). This is unexpected.")
+                # Fallback to random move if intent wasn't set for some reason
+                self.logger.info(f"Agent {self.id} submitting RandomMoveIntent as a fallback after failed task intent submission.")
+                random_move = RandomMoveIntent()
+                self.submit_intent(random_move)
+        else:
+            # No task was assigned or task preparation failed.
+            # Perform idle action: submit a RandomMoveIntent.
+            self.logger.info(f"Agent {self.id}: No task assigned or task preparation failed. Submitting RandomMoveIntent.")
+            random_move = RandomMoveIntent()
+            self.submit_intent(random_move)
 
     # --- End New Intent and Behavior Methods ---
+
+    # _seek_new_work_or_fallback is being removed as its functionality
+    # is moving into acquire_task_or_perform_idle_action and behaviors.
+
+    # _evaluate_and_select_task is being removed as task selection logic
+    # will be handled by TaskManager.assign_task_to_agent or refined in acquire_task_or_perform_idle_action.
+
+    # _move_randomly is being removed as RandomMoveIntent + MovingBehavior will handle this.
 
     def set_target(self, final_destination: pygame.math.Vector2):
         """
@@ -274,109 +259,7 @@ class Agent:
             # For now, task execution will likely fail if agent can't reach target.
             # self.set_objective_idle() # Or a specific failure state
 
-    def set_objective_idle(self):
-        """Sets the agent's state to IDLE and clears its target and path."""
-        old_state = self.state
-        self.state = AgentState.IDLE
-        self.target_position = None
-        self.current_path = None
-        self.final_destination = None
-        self.logger.debug(f"Agent {self.id} state transition: {old_state.name} -> {self.state.name}")
-
-    def set_objective_evaluating_tasks(self):
-        """Sets the agent's state to EVALUATING_TASKS."""
-        old_state = self.state
-        self.state = AgentState.EVALUATING_TASKS
-        self.target_position = None
-        self.current_path = None
-        self.final_destination = None
-        self.logger.debug(f"Agent {self.id} state transition: {old_state.name} -> {self.state.name}")
-
-    def set_objective_move_randomly(self):
-        """Sets the agent's state to MOVING_RANDOMLY and calculates a random path."""
-        old_state = self.state
-        self.state = AgentState.MOVING_RANDOMLY
-        # _move_randomly will pick a specific target and call self.set_target()
-        self.target_position = None
-        self.current_path = None
-        self.final_destination = None
-        self.logger.debug(f"Agent {self.id} state transition: {old_state.name} -> {self.state.name}")
-
-
-    def set_objective_move_to_resource(self, target_node_position: pygame.math.Vector2):
-        """Sets the agent's state to MOVING_TO_RESOURCE and calculates path."""
-        old_state = self.state
-        self.state = AgentState.MOVING_TO_RESOURCE
-        self.logger.debug(f"Agent {self.id} state transition: {old_state.name} -> {self.state.name}. Target: {target_node_position}")
-        self.set_target(target_node_position)
-
-    def set_objective_gather_resource(self, gathering_time: float):
-        """Sets the agent's state to GATHERING_RESOURCE and starts the timer."""
-        old_state = self.state
-        self.state = AgentState.GATHERING_RESOURCE
-        self.gathering_timer = gathering_time
-        self.target_position = None
-        self.current_path = None
-        self.final_destination = None
-        self.logger.debug(f"Agent {self.id} state transition: {old_state.name} -> {self.state.name}. Gathering time: {gathering_time}")
-
-
-    def set_objective_move_to_storage(self, storage_position: pygame.math.Vector2):
-        """Sets the agent's state to MOVING_TO_STORAGE and calculates path."""
-        old_state = self.state
-        self.state = AgentState.MOVING_TO_STORAGE
-        self.logger.debug(f"Agent {self.id} state transition: {old_state.name} -> {self.state.name}. Target: {storage_position}")
-        self.set_target(storage_position)
-
-    def set_objective_deliver_resource(self, delivery_time: float):
-        """Sets the agent's state to DELIVERING_RESOURCE and starts the timer."""
-        old_state = self.state
-        self.state = AgentState.DELIVERING_RESOURCE
-        self.delivery_timer = delivery_time
-        self.target_position = None
-        self.current_path = None
-        self.final_destination = None
-        self.logger.debug(f"Agent {self.id} state transition: {old_state.name} -> {self.state.name}. Delivery time: {delivery_time}")
-
-
-    def set_objective_move_to_processor(self, processor_position: pygame.math.Vector2):
-        """Sets the agent's state to MOVING_TO_PROCESSOR and calculates path."""
-        old_state = self.state
-        self.state = AgentState.MOVING_TO_PROCESSOR
-        self.logger.debug(f"Agent {self.id} state transition: {old_state.name} -> {self.state.name}. Target: {processor_position}")
-        self.set_target(processor_position)
-
-    def set_objective_deliver_to_processor(self, delivery_time: float):
-        """Sets the agent's state to DELIVERING_TO_PROCESSOR and starts the timer."""
-        old_state = self.state
-        self.state = AgentState.DELIVERING_TO_PROCESSOR
-        self.delivery_timer = delivery_time # Assuming delivery_timer can be reused
-        self.target_position = None
-        self.current_path = None
-        self.final_destination = None
-        self.logger.debug(f"Agent {self.id} state transition: {old_state.name} -> {self.state.name}. Delivery time: {delivery_time}")
-
-
-    def set_objective_collect_from_processor(self, collection_time: float):
-        """Sets the agent's state to COLLECTING_FROM_PROCESSOR and starts a timer."""
-        old_state = self.state
-        self.state = AgentState.COLLECTING_FROM_PROCESSOR
-        self.gathering_timer = collection_time # Assuming gathering_timer can be reused
-        self.target_position = None
-        self.current_path = None
-        self.final_destination = None
-        self.logger.debug(f"Agent {self.id} state transition: {old_state.name} -> {self.state.name}. Collection time: {collection_time}")
-
-
-    def set_objective_collect_from_storage(self, collection_time: float):
-        """Sets the agent's state to GATHERING_RESOURCE (reused for collecting from storage) and starts the timer."""
-        old_state = self.state
-        self.state = AgentState.GATHERING_RESOURCE # Reusing GATHERING_RESOURCE state
-        self.gathering_timer = collection_time
-        self.target_position = None
-        self.current_path = None
-        self.final_destination = None
-        self.logger.debug(f"Agent {self.id} state transition: {old_state.name} -> {self.state.name} (as GATHERING_RESOURCE for collecting from storage). Collection time: {collection_time}")
+    # All set_objective_* methods are being removed as they pertain to the old state system.
 
 
     def _follow_path(self, dt: float) -> bool:
@@ -454,216 +337,89 @@ class Agent:
         self.logger.debug(f"Agent {self.id} _follow_path: Waypoint {self.target_position} not yet reached. Returning False.")
         return False # Waypoint not yet reached
 
-    def _move_randomly(self, dt: float):
-        """Moves the agent randomly. If a path is set, it follows it. Otherwise, picks a new random target."""
-        self.logger.debug(f"Agent {self.id} _move_randomly: Current state: {self.state.name}, Has path: {self.current_path is not None}")
-        if not self.current_path and self.state == AgentState.MOVING_RANDOMLY: # Only pick new random if no path and in this state
-            self.logger.debug(f"Agent {self.id} _move_randomly: No current path and in MOVING_RANDOMLY state. Attempting to pick new random target.")
-            if self.grid.width_in_cells > 0 and self.grid.height_in_cells > 0: # type: ignore
-                random_target_pos = pygame.math.Vector2(
-                    random.uniform(0, self.grid.width_in_cells - 1), # type: ignore
-                    random.uniform(0, self.grid.height_in_cells - 1) # type: ignore
-                )
-                # Ensure it's int for grid purposes
-                random_target_pos.x = int(round(max(0, min(random_target_pos.x, self.grid.width_in_cells - 1)))) # type: ignore
-                random_target_pos.y = int(round(max(0, min(random_target_pos.y, self.grid.height_in_cells - 1)))) # type: ignore
-                
-                self.logger.debug(f"Agent {self.id} _move_randomly: New random target: {random_target_pos}") # Existing
-                self.set_target(random_target_pos) # This will calculate path
-                if not self.current_path: # Path calculation failed
-                    self.logger.warning(f"Agent {self.id} _move_randomly: Pathfinding FAILED for random move to {random_target_pos}. Becoming IDLE.") # Existing, modified
-                    self.set_objective_idle() # Become idle if can't path to random spot
-                    return
-                else:
-                    self.logger.debug(f"Agent {self.id} _move_randomly: Pathfinding SUCCEEDED for random move. Path: {self.current_path}")
-            else: # Grid not valid
-                self.logger.warning(f"Agent {self.id} _move_randomly: Grid not valid (width/height <=0). Becoming IDLE.")
-                self.set_objective_idle()
-                return
-
-        # Now, follow the path if one exists (either newly calculated or pre-existing for random move)
-        if self.current_path:
-            self.logger.debug(f"Agent {self.id} _move_randomly: Following existing path. Waypoint: {self.target_position}, Path: {self.current_path}")
-            if self._follow_path(dt): # True if waypoint reached
-                self.logger.debug(f"Agent {self.id} _move_randomly: _follow_path returned True (waypoint reached or path ended).")
-                if not self.current_path: # Path is now complete
-                    self.logger.debug(f"Agent {self.id} _move_randomly: Random move path completed. Becoming IDLE.")
-                    # print(f"DEBUG: Agent {self.id} completed random move path.")
-                    self.set_objective_idle() # Finished random move, become idle
-                # else: still on path, _follow_path handled next waypoint
-            # else: waypoint not reached, continue following
-        elif self.state == AgentState.MOVING_RANDOMLY : # No path, but was supposed to be moving randomly
-             self.logger.warning(f"Agent {self.id} _move_randomly: In MOVING_RANDOMLY state but no current_path (e.g. pathfinding failed and wasn't caught, or logic error). Becoming IDLE.")
-             # This case might occur if path calculation failed initially and set_target didn't set a path
-             # print(f"DEBUG: Agent {self.id} in MOVING_RANDOMLY but no path. Becoming IDLE.")
-             self.set_objective_idle()
-
-
-    def _evaluate_and_select_task(self, available_tasks: List['Task'], resource_manager: 'ResourceManager') -> Optional['Task']:
-        """
-        Evaluates available tasks and selects one based on agent's logic,
-        checking for resource availability, dropoff space, and inventory compatibility.
-        """
-        from ..resources.mill import Mill # For checking Mill instances
-
-        candidate_tasks: List[Task] = []
-
-        for task in available_tasks:
-            # --- GatherAndDeliverTask Evaluation ---
-            if isinstance(task, GatherAndDeliverTask):
-                task_resource_type = task.resource_type_to_gather
-                self.logger.debug(f"Agent {self.id} evaluating GatherAndDeliverTask {task.task_id} for resource {task_resource_type.name}.") # Changed
-
-                # 1. Check Agent's Resource Priorities
-                if self.resource_priorities and task_resource_type not in self.resource_priorities:
-                    self.logger.debug(f"Agent {self.id}: Task {task.task_id} resource {task_resource_type.name} not in priorities. Skipping.") # Changed
-                    continue
-                
-                # 2. Check Source Availability (ResourceNode)
-                if not resource_manager.has_available_sources(task_resource_type, min_quantity=1):
-                    self.logger.debug(f"Agent {self.id}: Task {task.task_id} - No available sources for {task_resource_type.name}. Skipping.") # Changed
-                    continue
-                
-                # 3. Check Dropoff Availability (StoragePoint)
-                # Agent will try to gather up to its capacity or what the task requires for this trip.
-                # This should align with the amount task.prepare() will attempt to reserve at the dropoff.
-                # For GatherAndDeliverTask, the amount it tries to reserve at dropoff is:
-                # qty_to_reserve_for_delivery = min(task.quantity_to_gather, agent.inventory_capacity)
-                # and this is further limited by target_resource_node_ref.current_quantity.
-                # For the agent's pre-check, we can estimate based on task.quantity_to_gather and agent's capacity.
-                
-                # Effective quantity the agent would aim to gather and thus need to reserve space for in one go.
-                # This considers what the task wants overall and what the agent can carry.
-                # It doesn't consider current node quantity here, as that's a more dynamic check in task.prepare().
-                prospective_gather_amount_for_trip = min(task.quantity_to_gather, self.inventory_capacity)
-                
-                # If agent already has some of the same resource, it can carry less of the new amount.
-                # However, the task reservation logic in `prepare` for `GatherAndDeliverTask` calculates
-                # `qty_to_reserve_for_delivery` based on `agent.inventory_capacity` (full capacity for the trip)
-                # and `task.quantity_to_gather`, not current free space.
-                # The actual gathering step then considers `can_carry_more`.
-                # To be consistent with the reservation logic, we use full capacity for this check.
-                # If the task is designed for multiple trips, this check might need to be smarter or rely on task.prepare failing.
-                # For now, let's assume a task aims to fill up for one trip if possible.
-
-                if prospective_gather_amount_for_trip <= 0: # If task quantity is 0 or agent capacity is 0
-                    self.logger.debug(f"Agent {self.id}: Task {task.task_id} - Prospective gather amount is {prospective_gather_amount_for_trip}. Skipping dropoff check or defaulting to 1.")
-                    # If task.quantity_to_gather is 0, it's a strange task, but let's assume it might still be valid if it means "gather what you can".
-                    # If agent capacity is 0, it can't do the task. This should be caught by inventory checks.
-                    # For safety, if it's 0, let's still check for min_capacity=1 as a fallback.
-                    prospective_gather_amount_for_trip = 1
-                
-                if not resource_manager.has_available_dropoffs(task_resource_type, min_capacity=prospective_gather_amount_for_trip):
-                    self.logger.debug(f"Agent {self.id}: Task {task.task_id} - No available dropoffs for {task_resource_type.name} (checked for capacity: {prospective_gather_amount_for_trip}). Skipping.") # Changed
-                    continue
-
-                # 4. Check Agent Inventory Compatibility & Capacity
-                current_inv_qty = self.current_inventory.get('quantity', 0)
-                current_inv_type = self.current_inventory.get('resource_type')
-
-                if current_inv_qty > 0 and current_inv_type != task_resource_type:
-                    if (self.inventory_capacity - current_inv_qty) < 1 : # Needs to be able to carry at least 1 of the new type
-                        self.logger.debug(f"Agent {self.id}: Task {task.task_id} - Inventory has {current_inv_qty} of {current_inv_type}, not enough space for {task_resource_type.name}. Skipping.") # Changed
-                        continue
-                
-                if current_inv_qty == self.inventory_capacity and (current_inv_type != task_resource_type or task.quantity_to_gather > 0) :
-                    self.logger.debug(f"Agent {self.id}: Task {task.task_id} - Inventory full with {current_inv_type}, cannot take task for {task_resource_type.name}. Skipping.") # Changed
-                    continue
-                
-                self.logger.debug(f"Agent {self.id}: Task {task.task_id} ({task_resource_type.name}) PASSED GatherAndDeliver checks.") # Changed
-                candidate_tasks.append(task)
-
-            # --- DeliverWheatToMillTask (TaskType.PROCESS_RESOURCE) Evaluation ---
-            elif isinstance(task, DeliverWheatToMillTask): # Check for the specific class
-                self.logger.debug(f"Agent {self.id} evaluating DeliverWheatToMillTask {task.task_id} for resource {task.resource_to_retrieve.name}.") # Changed
-
-                # 1. Agent inventory must be empty for this specific task type as per plan
-                if self.current_inventory.get('quantity', 0) > 0:
-                    self.logger.debug(f"Agent {self.id}: Task {task.task_id} (DeliverWheatToMill) - Agent inventory not empty. Skipping.") # Changed
-                    continue
-
-                # 2. Check if Wheat is available in any StoragePoint
-                # This is a simplified check; task.prepare() will do the actual reservation.
-                wheat_available_in_storage = False
-                for sp in resource_manager.storage_points:
-                    if sp.has_resource(ResourceType.WHEAT, 1): # Check for at least 1 unit
-                        wheat_available_in_storage = True
-                        break
-                if not wheat_available_in_storage:
-                    self.logger.debug(f"Agent {self.id}: Task {task.task_id} - No WHEAT found in any storage point. Skipping.") # Changed
-                    continue
-
-                # 3. Check if a Mill is available and can accept Wheat
-                # This is a simplified check; task.prepare() will find a specific mill.
-                mill_available_and_accepts = False
-                for station in resource_manager.processing_stations:
-                    if isinstance(station, Mill) and station.can_accept_input(ResourceType.WHEAT, 1):
-                        mill_available_and_accepts = True
-                        break
-                if not mill_available_and_accepts:
-                    self.logger.debug(f"Agent {self.id}: Task {task.task_id} - No Mill available or accepting WHEAT. Skipping.") # Changed
-                    continue
-                
-                self.logger.debug(f"Agent {self.id}: Task {task.task_id} ({task.resource_to_retrieve.name}) PASSED DeliverWheatToMill checks.") # Changed
-                candidate_tasks.append(task)
-            
-            else:
-                # Optionally handle other task types or log them
-                if task.task_type not in [TaskType.GATHER_AND_DELIVER, TaskType.PROCESS_RESOURCE]: # Check general task_type
-                     self.logger.debug(f"Agent {self.id} skipping unhandled task type {task.task_type.name} for task {task.task_id}.") # Changed
-                # If it's PROCESS_RESOURCE but not DeliverWheatToMillTask, it's currently unhandled by agent eval
-                elif task.task_type == TaskType.PROCESS_RESOURCE and not isinstance(task, DeliverWheatToMillTask):
-                     self.logger.debug(f"Agent {self.id} skipping PROCESS_RESOURCE task {task.task_id} as it's not DeliverWheatToMillTask.") # Changed
-
-
-        if not candidate_tasks:
-            self.logger.debug(f"Agent {self.id} found NO suitable tasks after full evaluation of {len(available_tasks)} initial tasks.") # Changed
-            return None
-
-        candidate_tasks.sort(key=lambda t: t.priority, reverse=True)
-        selected_task = candidate_tasks[0]
-        self.logger.debug(f"Agent {self.id} selected task {selected_task.task_id} ({selected_task.task_type.name}) P:{selected_task.priority} from {len(candidate_tasks)} candidates.") # Changed
-        return selected_task
-
+    # _move_randomly has been removed. Random movement is handled by RandomMoveIntent + MovingBehavior.
+    # _evaluate_and_select_task has been removed. Task selection is now initiated by
+    # acquire_task_or_perform_idle_action calling TaskManager.assign_task_to_agent.
 
     def update(self, dt: float, resource_manager: 'ResourceManager'):
-        """Updates the agent's behavior based on its current intent or fallback to old state logic."""
-        self.logger.debug(f"Agent {self.id} update START. Behavior: {self.current_behavior}, Intent: {self.current_intent.intent_id if self.current_intent else 'None'}, Old State: {self.state.name}")
+        """Updates the agent's behavior based on its current intent."""
+        self.logger.debug(f"Agent {self.id} update START. Behavior: {self.current_behavior}, Intent: {self.current_intent.intent_id if self.current_intent else 'None'}")
 
-        if self.current_intent and self.current_behavior:
-            # --- New Behavior/Intent System ---
-            self.logger.debug(f"Agent {self.id} updating behavior {self.current_behavior} for intent {self.current_intent.intent_id if self.current_intent else 'None'}")
-            intent_status_update = self.current_behavior.update(dt)
+        # The primary driving force is the current behavior processing the current intent,
+        # or EvaluatingIntentBehavior finding a new intent.
+        if not self.current_behavior:
+            self.logger.error(f"Agent {self.id} has no current_behavior. This should not happen. Defaulting to IdleBehavior.")
+            self._transition_behavior(IdleBehavior) # Should not happen, but as a safeguard
 
-            if intent_status_update is not None: # Behavior signals intent outcome
-                if self.current_intent:
-                    completed_intent_id = self.current_intent.intent_id # ID of the intent whose status was just updated by its behavior
-                    self.current_intent.status = intent_status_update
-                    log_message = f"Agent {self.id}: Intent {self.current_intent.intent_id} ({self.current_intent.get_description()}) outcome: {intent_status_update.name}."
-                    if self.current_intent.error_message:
-                        log_message += f" Error: {self.current_intent.error_message}"
-                    
+        # current_behavior.update() is the main logic driver.
+        # It might return an IntentStatus if the intent it was handling is done.
+        intent_status_update = self.current_behavior.update(dt, resource_manager)
+
+        if intent_status_update is not None: # Behavior signals an intent it was handling has finished
+            if self.current_intent:
+                completed_intent_id = self.current_intent.intent_id
+                self.current_intent.status = intent_status_update
+                log_message = f"Agent {self.id}: Intent {self.current_intent.intent_id} ({self.current_intent.get_description()}) outcome: {intent_status_update.name}."
+                if self.current_intent.error_message:
+                    log_message += f" Error: {self.current_intent.error_message}"
+                
+                if intent_status_update == IntentStatus.FAILED:
+                    self.logger.warning(log_message)
+                else:
+                    self.logger.info(log_message)
+    
+                    task_fully_concluded = False
+                    originating_task_id_of_intent = None
+    
+                    # Notify the task that owns this intent.
+                    if self.current_intent.originating_task_id:
+                        originating_task_id_of_intent = self.current_intent.originating_task_id
+                        self.logger.debug(f"Agent {self.id} notifying TaskManager about intent {self.current_intent.intent_id} outcome for task {originating_task_id_of_intent}.")
+                        self.task_manager_ref.notify_task_intent_outcome(
+                            originating_task_id_of_intent,
+                            self.current_intent.intent_id,
+                            intent_status_update,
+                            resource_manager,
+                            self
+                        )
+    
+                        # After notifying the task, check if the task itself is now completed or failed.
+                        task_object = self.task_manager_ref.get_task_by_id(originating_task_id_of_intent)
+                        self.logger.debug(f"Agent {self.id} post-notify: Task ID {originating_task_id_of_intent}. Retrieved task_object: {'Exists' if task_object else 'None'}. Intent outcome: {intent_status_update.name if intent_status_update else 'N/A'}")
+                        if task_object:
+                            self.logger.debug(f"Agent {self.id} post-notify: Task {task_object.task_id} current status from agent's perspective: {task_object.status.name if task_object.status else 'N/A'}")
+                            if task_object.status == TaskStatus.COMPLETED or task_object.status == TaskStatus.FAILED:
+                                self.logger.info(f"Agent {self.id}: Task {task_object.task_id} (Type: {task_object.task_type.name}) has reached terminal state: {task_object.status.name} after intent {self.current_intent.intent_id} outcome.")
+                                self.task_manager_ref.report_task_outcome(task_object, task_object.status, self)
+                                task_fully_concluded = True
+                                # Task cleanup (like releasing resources) should be handled by Task.cleanup()
+                                # which should be called by TaskManager.report_task_outcome or by the task itself.
+                                # For now, ensure TaskManager handles it.
+                        else:
+                            self.logger.warning(f"Agent {self.id}: Could not retrieve task {originating_task_id_of_intent} after intent outcome to check its final status.")
+    
+                    else: # Intent exists but no originating task (e.g. RandomMoveIntent)
+                        self.logger.debug(f"Agent {self.id}: Intent {self.current_intent.intent_id} (type: {type(self.current_intent)}) finished with {intent_status_update.name}, but no originating_task_id. No task to notify or report outcome for.")
+                        task_fully_concluded = True # Treat as concluded for the agent's current_intent processing
+    
+                    # Decide next step based on intent outcome
                     if intent_status_update == IntentStatus.FAILED:
-                        self.logger.warning(log_message)
-                    else:
-                        self.logger.info(log_message)
-
-                    # Notify the task that owns this intent, if a task is currently assigned via the old system.
-                    # This allows the task to react to the intent's outcome.
-                    if self.current_task and hasattr(self.current_task, 'on_intent_outcome') and self.current_intent:
-                        self.logger.debug(f"Agent {self.id} notifying task {self.current_task.task_id} of intent {self.current_intent.intent_id} outcome: {intent_status_update.name}")
-                        self.current_task.on_intent_outcome(self, self.current_intent.intent_id, intent_status_update, resource_manager)
-                    elif not self.current_task and self.current_intent:
-                        self.logger.debug(f"Agent {self.id}: Intent {self.current_intent.intent_id} finished with {intent_status_update.name}, but no current_task to notify (intent might be agent-internal).")
-                    
-                    if intent_status_update == IntentStatus.FAILED:
-                        if not isinstance(self.current_behavior, PathFailedBehavior):
-                             self._transition_behavior(PathFailedBehavior, self.current_intent)
-                        elif isinstance(self.current_behavior, PathFailedBehavior): # Already in PathFailed, so clear intent and evaluate
-                             self.current_intent = None
-                             self._transition_behavior(EvaluatingIntentBehavior)
-
+                        # If the task itself hasn't failed yet (e.g. intent failed but task might retry/recover)
+                        # then the agent might enter PathFailedBehavior.
+                        # If the task_fully_concluded as FAILED, then agent should just find new work.
+                        if not task_fully_concluded: # Task might still be trying to recover or has other steps
+                            if not isinstance(self.current_behavior, PathFailedBehavior):
+                                self._transition_behavior(PathFailedBehavior, self.current_intent) # Show path failure for this intent
+                            else: # Already in PathFailed, means the PathFailedBehavior itself "completed" its duty
+                                self.current_intent = None # Clear the failed intent
+                                self._transition_behavior(EvaluatingIntentBehavior) # Go find new work
+                        else: # Task itself is FAILED and reported
+                            self.current_intent = None
+                            self._transition_behavior(EvaluatingIntentBehavior)
+    
+    
                     elif intent_status_update == IntentStatus.COMPLETED:
+                        # Inventory updates for old Gather/Deliver intents (should be phased out)
                         if isinstance(self.current_intent, GatherIntent):
                             gathered_qty = self.current_intent.quantity_to_gather
                             resource_type = self.current_intent.resource_type
@@ -681,65 +437,62 @@ class Agent:
                                 self.current_inventory['resource_type'] = None
                             self.logger.info(f"Agent {self.id} inventory updated: -{delivered_qty}. New total: {self.current_inventory['quantity']}")
                         
-                        # Only set current_intent to None if it wasn't replaced by a new one
-                        # (e.g., by the task's on_intent_outcome method submitting a new intent).
+                        # If the task is fully concluded (COMPLETED or FAILED and reported), or if there was no task,
+                        # the agent should clear its current_intent and seek new work/evaluate next chained intent.
+                        # If the task is NOT fully_concluded, it means the task's on_intent_outcome might have submitted a new intent.
+                        # In that case, current_intent would be updated, and EvaluatingIntentBehavior will pick it up.
+                        if task_fully_concluded:
+                            if self.current_intent and self.current_intent.intent_id == completed_intent_id:
+                                 self.current_intent = None # Clear the intent that just finished
+                            self._transition_behavior(EvaluatingIntentBehavior)
+                        # If not task_fully_concluded, it implies the task itself has submitted a new intent.
+                        # The agent's current_intent might have been updated by task.on_intent_outcome.
+                        # Transitioning to EvaluatingIntentBehavior will handle processing this new/pending intent.
+                        else:
+                             self.logger.debug(f"Agent {self.id}: Intent {completed_intent_id} COMPLETED, but task {originating_task_id_of_intent} not yet terminal. Task will submit next intent. Current agent intent: {self.current_intent.intent_id if self.current_intent else 'None'}")
+                             self._transition_behavior(EvaluatingIntentBehavior)
+    
+    
+                    elif intent_status_update == IntentStatus.CANCELLED:
+                        self.logger.info(f"Agent {self.id}: Intent {completed_intent_id} was cancelled.")
+                        # If task was associated, it should have been marked FAILED by notify_task_intent_outcome
+                        # and then reported by the logic above.
                         if self.current_intent and self.current_intent.intent_id == completed_intent_id:
                             self.current_intent = None
-                        self._transition_behavior(EvaluatingIntentBehavior)
-
-                    elif intent_status_update == IntentStatus.CANCELLED:
-                        self.logger.info(f"Agent {self.id}: Intent {self.current_intent.intent_id} was cancelled.")
-                        self.current_intent = None
-                        self._transition_behavior(EvaluatingIntentBehavior)
+                        self._transition_behavior(EvaluatingIntentBehavior) # Go find new work
                 
-                else:
-                    self.logger.error(f"Agent {self.id}: Behavior {self.current_behavior} reported intent status but no current_intent was set.")
-                    self._transition_behavior(IdleBehavior)
-            
-            elif isinstance(self.current_behavior, EvaluatingIntentBehavior):
-                if self.current_intent and self.current_intent.status == IntentStatus.PENDING:
-                    self._process_current_intent()
-                elif not self.current_intent:
-                    self._seek_new_work_or_fallback(dt, resource_manager)
-
-        else:
-            self.logger.debug(f"Agent {self.id} falling back to old state system. Current old state: {self.state.name}")
-            current_time = pygame.time.get_ticks() / 1000.0
-
-            if self.current_task:
-                new_task_status = self.current_task.execute_step(self, dt, resource_manager)
-                if new_task_status in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED]:
-                    self.logger.info(f"Agent {self.id} (fallback): Task {self.current_task.task_id} finished with status {new_task_status.name}.")
-                    self.current_task.cleanup(self, resource_manager, success=(new_task_status == TaskStatus.COMPLETED))
-                    self.task_manager_ref.report_task_outcome(self.current_task, new_task_status, self)
-                    self.current_task = None
-                    self.set_objective_idle()
-                    if new_task_status == TaskStatus.COMPLETED and self.current_inventory['quantity'] == 0:
-                        self.current_inventory['resource_type'] = None
-            else:
-                self._seek_new_work_or_fallback(dt, resource_manager)
-
-            if self.state == AgentState.GATHERING_RESOURCE:
-                if self.gathering_timer > 0:
-                    self.gathering_timer -= dt
-                    if self.gathering_timer < 0: self.gathering_timer = 0
-            elif self.state == AgentState.DELIVERING_RESOURCE:
-                if self.delivery_timer > 0:
-                    self.delivery_timer -= dt
-                    if self.delivery_timer < 0: self.delivery_timer = 0
-            elif self.state == AgentState.COLLECTING_FROM_PROCESSOR:
-                if self.gathering_timer > 0:
-                    self.gathering_timer -= dt
-                    if self.gathering_timer < 0: self.gathering_timer = 0
-            elif self.state == AgentState.DELIVERING_TO_PROCESSOR:
-                if self.delivery_timer > 0:
-                    self.delivery_timer -= dt
-                    if self.delivery_timer < 0: self.delivery_timer = 0
+                    else:
+                        self.logger.error(f"Agent {self.id}: Behavior {self.current_behavior} reported intent status but no current_intent was set on agent.")
+                        self._transition_behavior(IdleBehavior) # Default to idle
         
-        if not self.current_intent and not self.current_task:
-            if self.state not in [AgentState.IDLE, AgentState.EVALUATING_TASKS, AgentState.MOVING_RANDOMLY]:
-                self.logger.warning(f"Agent {self.id} (fallback): No task/intent, but in old state {self.state.name}. Forcing IDLE (old system).")
-                self.set_objective_idle()
+        # If no intent status update was returned by the behavior, it means the behavior is ongoing.
+        # If the behavior is EvaluatingIntentBehavior, its update method should have already
+        # called _process_current_intent (if a PENDING intent exists) or
+        # acquire_task_or_perform_idle_action (if no intent exists).
+        # So, no further direct action needed here for EvaluatingIntentBehavior.
+        
+        # Fallback logic (to be removed)
+        # The 'else' part of the original 'if self.current_intent and self.current_behavior:'
+        # which contained the old state system logic, is now removed.
+        # If an agent somehow ends up with no current_intent and is not in EvaluatingIntentBehavior,
+        # it should naturally transition to EvaluatingIntentBehavior when its current behavior completes
+        # or if an external event submits a new intent.
+        # If it's in IdleBehavior, it will stay there until a new intent is submitted.
+        # EvaluatingIntentBehavior is responsible for proactive work seeking.
+
+        # Final check: if agent is not in a behavior that actively seeks work (like EvaluatingIntentBehavior)
+        # and has no intent, it should probably be in Idle or transition to Evaluating to find work.
+        # This is mostly handled by behaviors transitioning to EvaluatingIntentBehavior upon completion.
+        if not self.current_intent and not isinstance(self.current_behavior, EvaluatingIntentBehavior) and not isinstance(self.current_behavior, IdleBehavior) :
+            self.logger.debug(f"Agent {self.id} has no intent and is in behavior {self.current_behavior}. Transitioning to EvaluatingIntentBehavior to find work.")
+            self._transition_behavior(EvaluatingIntentBehavior)
+        elif not self.current_intent and isinstance(self.current_behavior, IdleBehavior):
+            # If truly idle with no intent, it should try to find work.
+            # This can be done by transitioning to EvaluatingIntentBehavior.
+            # This ensures an agent doesn't get stuck in Idle if acquire_task_or_perform_idle_action
+            # somehow didn't result in an immediate new intent (e.g. cooldowns in task manager).
+            self.logger.debug(f"Agent {self.id} is Idle with no intent. Transitioning to EvaluatingIntentBehavior to seek work.")
+            self._transition_behavior(EvaluatingIntentBehavior)
 
 
     def draw(self, screen: pygame.Surface, grid):
@@ -748,10 +501,9 @@ class Agent:
         agent_radius = self.grid.cell_width // 2 # type: ignore
 
         current_display_color = self.color # Default
-        if self.current_intent and self.current_behavior: # New system active
-            current_display_color = self.behavior_colors.get(type(self.current_behavior), self.color)
-        else: # Fallback to old system color
-            current_display_color = self._old_state_colors.get(self.state, self.color)
+        # Always use new system for color, as old system is being removed.
+        # If no current_intent, it might be in IdleBehavior or EvaluatingIntentBehavior.
+        current_display_color = self.behavior_colors.get(type(self.current_behavior), self.color)
             
         pygame.draw.circle(screen, current_display_color, screen_pos, agent_radius)
 

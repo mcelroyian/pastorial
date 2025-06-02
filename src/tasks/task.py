@@ -5,7 +5,6 @@ from typing import Optional, TYPE_CHECKING, List
 
 from .task_types import TaskType, TaskStatus
 from ..resources.resource_types import ResourceType # Assuming this path is correct
-from ..agents.agent_defs import AgentState # Import from agent_defs # Will be removed from tasks later
 from ..agents.intents import Intent, IntentStatus, MoveIntent, InteractAtTargetIntent # New import
 
 # Forward references to avoid circular imports
@@ -38,17 +37,7 @@ class Task(ABC):
         Sets the task status to PREPARING during its execution.
         Returns True if preparation was successful and the task can proceed, False otherwise.
         If successful, should set the task's status to an appropriate IN_PROGRESS state
-        and potentially the agent's initial state.
-        """
-        pass
-
-    @abstractmethod
-    def execute_step(self, agent: 'Agent', dt: float, resource_manager: 'ResourceManager') -> TaskStatus:
-        """
-        Advances the task logic by one step or time delta.
-        This method is called repeatedly by the assigned agent.
-        It should update the task's status and return it.
-        The task itself is responsible for changing the agent's state (e.g., agent.state = AgentState.MOVING_TO_RESOURCE).
+        and submit the first intent to the agent.
         """
         pass
 
@@ -130,7 +119,6 @@ class GatherAndDeliverTask(Task):
         # from ..agents.agent import AgentState # REMOVED
         self._update_timestamp()
         self.status = TaskStatus.PREPARING
-        # agent.target_position = None # Agent's objective methods will handle target
 
         # 1. Find and Claim Resource Node
         if not self.target_resource_node_ref:
@@ -213,7 +201,7 @@ class GatherAndDeliverTask(Task):
             self.status = TaskStatus.FAILED
             return False
 
-        move_intent = MoveIntent(interaction_pos_node)
+        move_intent = MoveIntent(interaction_pos_node, task_id=self.task_id)
         self._submit_intent_to_agent(agent, move_intent)
         
         self.status = TaskStatus.IN_PROGRESS_MOVE_TO_RESOURCE # Initial task status
@@ -224,27 +212,10 @@ class GatherAndDeliverTask(Task):
         print(f"Task {self.task_id} PREPARED for agent {agent.id}. Submitted MoveIntent to Node: {self.target_resource_node_ref.position}. Reserved Dropoff Qty: {self.reserved_at_dropoff_quantity}")
         return True
 
-    def execute_step(self, agent: 'Agent', dt: float, resource_manager: 'ResourceManager') -> TaskStatus:
-        self._update_timestamp()
-        # With the new Intent system, execute_step becomes much simpler.
-        # The primary logic for advancing the task will be in on_intent_outcome.
-        # This method mainly just returns the current status.
-        # If there are active intents, the task is considered in progress.
-        
-        if not self.target_resource_node_ref or not self.target_dropoff_ref:
-            if self.status not in [TaskStatus.FAILED, TaskStatus.COMPLETED, TaskStatus.CANCELLED]:
-                self.error_message = "Target resource or dropoff became invalid during execution (execute_step check)."
-                self.status = TaskStatus.FAILED
-            return self.status
-
-        # If the task is PENDING or PREPARING, it shouldn't be in execute_step yet.
-        # If it's COMPLETED, FAILED, or CANCELLED, it should also not be here.
-        # So, if we are here, it's likely IN_PROGRESS (or one of its sub-statuses).
-        # The actual state transitions happen in on_intent_outcome.
-        
-        # print(f"Task {self.task_id} execute_step. Current status: {self.status.name}, Step key: {self._current_step_key}, Active Intents: {len(self.active_intents)}")
-        return self.status
-
+    # execute_step is no longer needed as task progression is driven by on_intent_outcome
+    # def execute_step(self, agent: 'Agent', dt: float, resource_manager: 'ResourceManager') -> TaskStatus:
+    #     self._update_timestamp()
+    #     return self.status
 
     def cleanup(self, agent: 'Agent', resource_manager: 'ResourceManager', success: bool):
         self._update_timestamp()
@@ -320,7 +291,8 @@ class GatherAndDeliverTask(Task):
                 gather_intent = InteractAtTargetIntent(
                     target_id=self.target_resource_node_ref.id, # type: ignore
                     interaction_type="GATHER_RESOURCE",
-                    duration=agent.config.DEFAULT_GATHERING_TIME
+                    duration=agent.config.DEFAULT_GATHERING_TIME,
+                    task_id=self.task_id
                 )
                 self._submit_intent_to_agent(agent, gather_intent)
 
@@ -360,7 +332,7 @@ class GatherAndDeliverTask(Task):
                     # Note: Resources are in agent's inventory. Cleanup will handle node/storage reservations if any are left.
                     return
 
-                move_to_dropoff_intent = MoveIntent(interaction_pos_dropoff)
+                move_to_dropoff_intent = MoveIntent(interaction_pos_dropoff, task_id=self.task_id)
                 self._submit_intent_to_agent(agent, move_to_dropoff_intent)
 
                 if self.target_resource_node_ref and (self.quantity_gathered >= self.quantity_to_gather or self.target_resource_node_ref.current_quantity < 1): # type: ignore
@@ -378,7 +350,8 @@ class GatherAndDeliverTask(Task):
                 deliver_intent = InteractAtTargetIntent(
                     target_id=self.target_dropoff_ref.id, # type: ignore
                     interaction_type="DELIVER_RESOURCE",
-                    duration=agent.config.DEFAULT_DELIVERY_TIME
+                    duration=agent.config.DEFAULT_DELIVERY_TIME,
+                    task_id=self.task_id
                 )
                 self._submit_intent_to_agent(agent, deliver_intent)
 
@@ -454,7 +427,6 @@ class DeliverWheatToMillTask(Task):
 
         self._update_timestamp()
         self.status = TaskStatus.PREPARING
-        agent.target_position = None
 
         if agent.current_inventory['quantity'] > 0:
             self.error_message = f"Agent {agent.id} inventory is not empty (has {agent.current_inventory['quantity']} of {agent.current_inventory['resource_type']}). Cannot start DeliverWheatToMillTask."
@@ -525,7 +497,7 @@ class DeliverWheatToMillTask(Task):
             self.status = TaskStatus.FAILED
             return False
 
-        move_to_storage_intent = MoveIntent(interaction_pos_storage)
+        move_to_storage_intent = MoveIntent(interaction_pos_storage, task_id=self.task_id)
         self._submit_intent_to_agent(agent, move_to_storage_intent)
 
         self.status = TaskStatus.IN_PROGRESS_MOVE_TO_STORAGE
@@ -534,14 +506,10 @@ class DeliverWheatToMillTask(Task):
         print(f"Task {self.task_id} (DeliverWheatToMill) PREPARED for agent {agent.id}. Submitted MoveIntent to Storage: {self.target_storage_ref.position}. Reserved Pickup Qty: {self.reserved_at_storage_for_pickup_quantity}")
         return True
 
-    def execute_step(self, agent: 'Agent', dt: float, resource_manager: 'ResourceManager') -> TaskStatus:
-        self._update_timestamp()
-        # Logic moves to on_intent_outcome
-        if not self.target_storage_ref or not self.target_processor_ref:
-            if self.status not in [TaskStatus.FAILED, TaskStatus.COMPLETED, TaskStatus.CANCELLED]:
-                self.error_message = "Target storage or processor became invalid during execution (execute_step check)."
-                self.status = TaskStatus.FAILED
-        return self.status
+    # execute_step is no longer needed
+    # def execute_step(self, agent: 'Agent', dt: float, resource_manager: 'ResourceManager') -> TaskStatus:
+    #     self._update_timestamp()
+    #     return self.status
 
     def cleanup(self, agent: 'Agent', resource_manager: 'ResourceManager', success: bool):
         self._update_timestamp()
@@ -620,7 +588,8 @@ class DeliverWheatToMillTask(Task):
                 collect_intent = InteractAtTargetIntent(
                     target_id=self.target_storage_ref.id, # type: ignore
                     interaction_type="COLLECT_FROM_STORAGE",
-                    duration=collection_time
+                    duration=collection_time,
+                    task_id=self.task_id
                 )
                 self._submit_intent_to_agent(agent, collect_intent)
 
@@ -658,7 +627,7 @@ class DeliverWheatToMillTask(Task):
                         # Agent has items, but can't path to mill. This is a task failure.
                         return
 
-                    move_to_mill_intent = MoveIntent(interaction_pos_mill)
+                    move_to_mill_intent = MoveIntent(interaction_pos_mill, task_id=self.task_id)
                     self._submit_intent_to_agent(agent, move_to_mill_intent)
                 else: # Nothing retrieved, or reservation exhausted before getting anything
                     self.status = TaskStatus.FAILED; self.error_message = "No items retrieved from storage, or reservation issue."; return
@@ -670,7 +639,8 @@ class DeliverWheatToMillTask(Task):
                 deliver_intent = InteractAtTargetIntent(
                     target_id=self.target_processor_ref.id, # type: ignore
                     interaction_type="DELIVER_TO_PROCESSOR",
-                    duration=agent.config.DEFAULT_DELIVERY_TIME
+                    duration=agent.config.DEFAULT_DELIVERY_TIME,
+                    task_id=self.task_id
                 )
                 self._submit_intent_to_agent(agent, deliver_intent)
 

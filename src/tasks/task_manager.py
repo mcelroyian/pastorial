@@ -8,6 +8,7 @@ from .task_types import TaskType, TaskStatus
 from ..resources.resource_types import ResourceType # Assuming this path
 from ..resources.mill import Mill # For checking Mill instances
 from ..core import config # For task generation settings
+from ..agents.intents import IntentStatus # For type hinting
 
 # Forward references to avoid circular imports
 if TYPE_CHECKING:
@@ -131,13 +132,15 @@ class TaskManager:
         """
         Called by an Agent when its current task is finished (completed, failed, or cancelled).
         """
+        self.logger.debug(f"TaskManager: report_task_outcome CALLED by agent {agent.id} for task {task.task_id} (type: {task.task_type.name}) with status {final_status.name}. Current assigned_tasks keys: {list(self.assigned_tasks.keys())}, task.agent_id: {task.agent_id}")
         task.status = final_status # Ensure final status is set on the task object
         task.last_update_time = time.time()
 
         if agent.id in self.assigned_tasks and self.assigned_tasks[agent.id].task_id == task.task_id:
+            self.logger.debug(f"TaskManager: Removing task {task.task_id} for agent {agent.id} from assigned_tasks.")
             del self.assigned_tasks[agent.id]
         else:
-            self.logger.warning(f"TaskManager received outcome for task {task.task_id} from agent {agent.id}, but it was not in assigned_tasks or mismatch.") # Changed
+            self.logger.warning(f"TaskManager: Task {task.task_id} (agent {agent.id}) NOT removed from assigned_tasks. Agent ID in assigned: {agent.id in self.assigned_tasks}. Task ID matches: {self.assigned_tasks[agent.id].task_id == task.task_id if agent.id in self.assigned_tasks else 'N/A'}. Assigned task for agent: {self.assigned_tasks.get(agent.id)}") # Changed
 
         if final_status == TaskStatus.COMPLETED:
             self.completed_tasks.append(task)
@@ -160,6 +163,120 @@ class TaskManager:
             # Depending on policy, cancelled tasks might also be re-posted or archived.
             self.failed_tasks.append(task) # Or a self.cancelled_tasks list
             self.logger.info(f"TaskManager: Task {task.task_id} CANCELLED for agent {agent.id}. Added to failed/cancelled list.") # Changed
+
+
+    def assign_task_to_agent(self, agent: 'Agent', resource_manager: 'ResourceManager') -> bool:
+        """
+        Finds a suitable task for the agent, assigns it, and initiates its preparation.
+        Returns True if a task was successfully assigned and its preparation started, False otherwise.
+        """
+        self.logger.debug(f"TaskManager: Agent {agent.id} requesting a task.")
+        if not self.pending_tasks:
+            self.logger.debug(f"TaskManager: No pending tasks available for agent {agent.id}.")
+            return False
+
+        # Iterate over a copy for safe removal, sorted by priority (already sorted by add_task)
+        for i, task in enumerate(list(self.pending_tasks)): # Iterate a copy
+            # Pre-qualification checks (simplified version of old Agent._evaluate_and_select_task)
+            # TODO: Enhance this pre-qualification logic
+            can_perform_task = False
+            if isinstance(task, GatherAndDeliverTask):
+                # Basic check: agent inventory not full with a different resource type
+                if agent.current_inventory['quantity'] == 0 or \
+                   agent.current_inventory['resource_type'] == task.resource_type_to_gather or \
+                   (agent.current_inventory['quantity'] < agent.inventory_capacity):
+                    can_perform_task = True
+            elif isinstance(task, DeliverWheatToMillTask):
+                if agent.current_inventory['quantity'] == 0: # Must have empty inventory
+                    can_perform_task = True
+            else:
+                can_perform_task = True # Default for other task types for now
+
+            if not can_perform_task:
+                self.logger.debug(f"TaskManager: Agent {agent.id} cannot perform task {task.task_id} ({task.task_type.name}) due to pre-qualification.")
+                continue
+
+            # Attempt to claim the task (by removing it from the original list)
+            try:
+                actual_task_idx = -1
+                for original_idx, original_task_obj in enumerate(self.pending_tasks):
+                    if original_task_obj.task_id == task.task_id:
+                        actual_task_idx = original_idx
+                        break
+                
+                if actual_task_idx != -1:
+                    claimed_task = self.pending_tasks.pop(actual_task_idx)
+                else:
+                    self.logger.debug(f"TaskManager: Task {task.task_id} was no longer in pending_tasks (claimed by another agent?).")
+                    continue # Task was claimed by another agent or removed
+
+                self.logger.info(f"TaskManager: Attempting to assign task {claimed_task.task_id} ({claimed_task.task_type.name}) to agent {agent.id}.")
+                claimed_task.agent_id = agent.id
+                claimed_task.status = TaskStatus.ASSIGNED # Mark as assigned before prepare
+                self.assigned_tasks[agent.id] = claimed_task
+
+                if claimed_task.prepare(agent, resource_manager):
+                    self.logger.info(f"TaskManager: Task {claimed_task.task_id} successfully prepared and assigned to agent {agent.id}.")
+                    # task.prepare() should have submitted an intent to the agent.
+                    return True # Task assigned and preparation started
+                else:
+                    self.logger.warning(f"TaskManager: Task {claimed_task.task_id} FAILED preparation for agent {agent.id}. Error: {claimed_task.error_message}")
+                    # report_task_outcome will handle moving it from assigned_tasks and re-posting/failing it.
+                    self.report_task_outcome(claimed_task, TaskStatus.FAILED, agent)
+                    # Continue to check for other tasks for this agent in this cycle
+            
+            except ValueError: # If task was already removed from pending_tasks
+                self.logger.debug(f"TaskManager: Task {task.task_id} was already removed from pending list, likely claimed by another agent.")
+                continue # Try next task
+
+        self.logger.debug(f"TaskManager: No suitable task found or assigned for agent {agent.id} after checking {len(self.pending_tasks)} tasks.")
+        return False
+
+    def notify_task_intent_outcome(self,
+                                   task_id: uuid.UUID,
+                                   intent_id: uuid.UUID,
+                                   intent_status: IntentStatus,
+                                   resource_manager: 'ResourceManager',
+                                   agent: 'Agent'): # Added agent
+        """
+        Called by an Agent when an Intent associated with a Task has an outcome.
+        This method finds the task and calls its on_intent_outcome method.
+        """
+        self.logger.debug(f"TaskManager: Received intent outcome for task {task_id}, intent {intent_id}, status {intent_status.name} from agent {agent.id}")
+        
+        # Find the task. It could be in pending_tasks (if prepare submitted an intent and it's still there)
+        # or more likely in assigned_tasks.
+        task_to_notify: Optional[Task] = None
+        
+        # Check assigned tasks first
+        for assigned_agent_id, task in self.assigned_tasks.items():
+            if task.task_id == task_id:
+                if assigned_agent_id == agent.id: # Ensure the notification is from the correct agent
+                    task_to_notify = task
+                    break
+                else:
+                    self.logger.warning(f"TaskManager: Intent outcome for task {task_id} received from agent {agent.id}, but task is assigned to agent {assigned_agent_id}.")
+                    return # Or handle as an error
+
+        # If not found in assigned, check pending (less likely for ongoing intents but possible for initial ones)
+        if not task_to_notify:
+            for task in self.pending_tasks:
+                if task.task_id == task_id:
+                    # This scenario is unusual for an intent outcome unless it's an immediate failure during prepare.
+                    self.logger.warning(f"TaskManager: Intent outcome for task {task_id} which is still in PENDING list. Agent: {agent.id}")
+                    task_to_notify = task # Allow it, task.on_intent_outcome should handle its state.
+                    break
+        
+        if task_to_notify:
+            self.logger.debug(f"TaskManager: Relaying intent outcome to task {task_to_notify.task_id} ({task_to_notify.task_type.name}).")
+            task_to_notify.on_intent_outcome(agent, intent_id, intent_status, resource_manager)
+            # The task's on_intent_outcome might change its status.
+            # If the task becomes COMPLETED or FAILED, the agent's main loop should then call report_task_outcome.
+            # Or, if on_intent_outcome determines the task is finished, it could directly update its status
+            # and the agent's main loop would pick that up.
+            # For now, we assume the agent will call report_task_outcome based on the task's status after this.
+        else:
+            self.logger.warning(f"TaskManager: Could not find task {task_id} to notify about intent {intent_id} outcome from agent {agent.id}. It might have already completed/failed.")
 
 
     def update(self, dt: float):
@@ -186,6 +303,7 @@ class TaskManager:
         Generates tasks based on simulation state, e.g., low resource stock.
         Currently implements logic for Berry stock.
         """
+        self.logger.debug(f"TaskManager: _generate_tasks_if_needed CALLED. Pending: {len(self.pending_tasks)}, Assigned: {len(self.assigned_tasks)}")
         # --- Berry Task Generation ---
         current_berry_stock = self.resource_manager_ref.get_global_resource_quantity(ResourceType.BERRY)
         
