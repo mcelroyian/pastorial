@@ -1,4 +1,5 @@
 import pygame
+import asyncio
 import time
 import random
 import logging # Added
@@ -354,7 +355,7 @@ class GameLoop:
 
         pygame.display.flip() # Update the full display Surface to the screen
 
-    def run(self):
+    async def run(self):
         """Executes the main game loop."""
         self.is_running = True
         self.last_time = time.perf_counter() # Reset timer before loop starts
@@ -386,5 +387,6 @@ class GameLoop:
             # We can use clock.tick here to limit the *rendering* frame rate
             # if needed, but the update logic is decoupled by the fixed step.
             self.clock.tick() # Tick without arg just measures time for get_fps()
+            await asyncio.sleep(0)
 
         # Pygame quit is handled in main.py after the loop exits

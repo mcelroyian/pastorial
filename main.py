@@ -1,12 +1,13 @@
 import pygame
 import sys
 import logging # Added
+import asyncio
 from src.core import config
 from src.core.game_loop import GameLoop
 from src.rendering import debug_display
 from src.core.logger import setup_logging # Added
 
-def main():
+async def main():
     """Initializes Pygame, creates the game window and runs the game loop."""
     # Configure logging:
     # - Default log level is INFO.
@@ -64,7 +65,7 @@ def main():
 
     try:
         logger.info("Starting game run loop.") # Added
-        game.run()
+        await game.run()
     except Exception as e:
         logger.critical(f"FATAL: Error during game.run(): {e}") # Changed
         raise
@@ -76,4 +77,4 @@ def main():
     sys.exit()
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
