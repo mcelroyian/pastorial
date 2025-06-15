@@ -1,8 +1,19 @@
 import logging
 import sys
+from ..core import config
 
 DEFAULT_LOG_LEVEL = logging.INFO
-LOG_FORMAT = "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+LOG_FORMAT = "%(asctime)s - %(levelname)s - %(name)s - [%(agent_name)s|%(agent_id)s] - %(message)s"
+
+# Custom Formatter to handle the agent_id
+class AgentIdFormatter(logging.Formatter):
+    """A custom log formatter that adds a default value for agent_id if it's missing."""
+    def format(self, record):
+        if not hasattr(record, 'agent_id'):
+            record.agent_id = 'SYSTEM' # Default value for non-agent logs
+        if not hasattr(record, 'agent_name'):
+            record.agent_name = 'SYSTEM' # Default value for non-agent logs
+        return super().format(record)
 
 def setup_logging(default_level=DEFAULT_LOG_LEVEL, per_module_levels=None):
     """
@@ -20,7 +31,8 @@ def setup_logging(default_level=DEFAULT_LOG_LEVEL, per_module_levels=None):
                                            (e.g., logging.DEBUG).
                                            Defaults to None.
     """
-    formatter = logging.Formatter(LOG_FORMAT)
+    # Use the custom formatter
+    formatter = AgentIdFormatter(LOG_FORMAT)
 
     # Console Handler
     console_handler = logging.StreamHandler(sys.stdout)
@@ -33,6 +45,12 @@ def setup_logging(default_level=DEFAULT_LOG_LEVEL, per_module_levels=None):
     # Add handlers to the root logger
     if not root_logger.hasHandlers(): # Avoid adding multiple handlers if called more than once
         root_logger.addHandler(console_handler)
+
+        # File Handler (optional, based on config)
+        if config.LOG_TO_FILE:
+            file_handler = logging.FileHandler(config.LOG_FILE_PATH, mode=config.LOG_FILE_MODE)
+            file_handler.setFormatter(formatter)
+            root_logger.addHandler(file_handler)
 
     # Apply per-module log levels
     if per_module_levels:

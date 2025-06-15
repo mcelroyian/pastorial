@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Optional
 
-from .intents import Intent, IntentStatus, RandomMoveIntent # Assuming intents.py is in the same directory
+from .intents import Intent, IntentStatus, MoveIntent, RandomMoveIntent # Assuming intents.py is in the same directory
+from ..pathfinding.utils import find_closest_walkable_tile
 
 if TYPE_CHECKING:
     from .agent import Agent # To avoid circular import, for type hinting only
@@ -100,8 +101,8 @@ class MovingBehavior(AgentBehavior):
             self.agent.current_path = None # Ensure no path
 
         if self.agent.current_path is None and self.move_intent: # Check if pathfinding failed for any type of move intent
-            self.agent.logger.warning(f"Agent {self.agent.id} MovingBehavior: Pathfinding failed for intent {self.move_intent.intent_id} (type: {type(self.move_intent)}).")
-            # Failure will be handled in update()
+            self.agent.logger.warning(f"Agent {self.agent.id} MovingBehavior: Pathfinding failed for intent {self.move_intent.intent_id} (type: {type(self.move_intent)}). Transitioning to PathFailedBehavior.")
+            self.agent._transition_behavior(PathFailedBehavior, self.move_intent)
         elif self.move_intent:
             self.agent.logger.debug(f"Agent {self.agent.id} MovingBehavior: Path set for intent {self.move_intent.intent_id} (type: {type(self.move_intent)}).")
 
@@ -111,20 +112,8 @@ class MovingBehavior(AgentBehavior):
             self.agent.logger.error(f"Agent {self.agent.id} MovingBehavior: update called but no move_intent set.")
             return IntentStatus.FAILED
 
-        # If pathfinding failed in enter() or path is otherwise None, and we are not already at a potential target
-        # (e.g. for RandomMoveIntent, target_position might not be set if grid was invalid)
-        if not self.agent.current_path and not self.agent.target_position:
-            # For non-RandomMoveIntent, check if already at the specified target_position
-            if not isinstance(self.move_intent, RandomMoveIntent) and hasattr(self.move_intent, 'target_position'):
-                target_pos = getattr(self.move_intent, 'target_position')
-                if self.agent.position.distance_to(target_pos) < self.agent.target_tolerance:
-                    self.agent.logger.debug(f"Agent {self.agent.id} MovingBehavior: Already at target {target_pos} for intent {self.move_intent.intent_id}. Path completed.")
-                    return IntentStatus.COMPLETED
-            
-            self.agent.logger.warning(f"Agent {self.agent.id} MovingBehavior: No path and not at target. Intent {self.move_intent.intent_id} failed.")
-            return IntentStatus.FAILED
-
-        # If there's a target_position (waypoint), try to follow path
+        # If pathfinding failed, the agent would have transitioned to PathFailedBehavior in enter().
+        # This update loop now only needs to handle the case where there is a valid path.
         if self.agent.target_position:
             path_follow_result = self.agent._follow_path(dt) # _follow_path returns True if waypoint reached or path ended
 
@@ -132,24 +121,13 @@ class MovingBehavior(AgentBehavior):
                 if not self.agent.current_path: # Path is now empty, meaning final destination reached
                     self.agent.logger.debug(f"Agent {self.agent.id} MovingBehavior: Path completed for intent {self.move_intent.intent_id}.")
                     return IntentStatus.COMPLETED
-            
-            # If path_follow_result is False, it means still moving towards current waypoint.
-            # If current_path exists but target_position is None (should not happen if _follow_path is robust)
-            if self.agent.current_path and self.agent.target_position is None:
-                self.agent.logger.error(f"Agent {self.agent.id} MovingBehavior: current_path exists but target_position is None. Critical error.")
-                return IntentStatus.FAILED
-        elif not self.agent.current_path: # No target_position and no current_path means we are likely done or failed to start
-             # This case handles if set_target resulted in an immediate completion (already at destination)
-             # or if RandomMoveIntent failed to set a target due to invalid grid.
-            if isinstance(self.move_intent, RandomMoveIntent):
-                 # If it was a RandomMoveIntent and we end up here without a path/target, it might have failed to generate one.
-                 self.agent.logger.warning(f"Agent {self.agent.id} MovingBehavior: RandomMoveIntent has no path/target in update. Assuming failure or completion if no error logged prior.")
-                 # If no error was logged during `enter` for RandomMoveIntent, it implies it might have considered itself at target.
-                 # However, a RandomMoveIntent should always try to move. If it can't set a path, it's a failure of that intent.
-                 return IntentStatus.FAILED # Or COMPLETED if it's a "do nothing" random move. Let's assume FAILED if no path.
-            else: # For specific MoveIntent, if no target_position and no path, it's likely completed.
-                 self.agent.logger.debug(f"Agent {self.agent.id} MovingBehavior: No target_position and no current_path for intent {self.move_intent.intent_id}. Assuming completed.")
-                 return IntentStatus.COMPLETED
+        
+        # If there's no target position, it implies the path is complete or was never set.
+        # If it was never set, the agent would have transitioned to PathFailedBehavior.
+        # Therefore, we can assume completion.
+        elif not self.agent.current_path:
+            self.agent.logger.debug(f"Agent {self.agent.id} MovingBehavior: No target_position and no current_path. Assuming path completed.")
+            return IntentStatus.COMPLETED
 
 
         return None # Still actively moving or waiting for next update cycle
@@ -202,22 +180,86 @@ class InteractingBehavior(AgentBehavior):
         self.timer = 0.0
 
 class PathFailedBehavior(AgentBehavior):
-    """Behavior for when the agent fails to find a path."""
+    """
+    Behavior for handling pathfinding failures with recovery strategies like
+    finding a new target, retrying, or giving up.
+    """
+    def __init__(self, agent: 'Agent'):
+        super().__init__(agent)
+        self.failed_intent: Optional[Intent] = None
+        self.retry_count: int = 0
+        self.retry_timer: float = 0.0
+
     def enter(self, intent: Optional[Intent] = None):
         self.agent.logger.warning(f"Agent {self.agent.id} entering PathFailedBehavior for intent {intent.intent_id if intent else 'Unknown'}.")
-        # Potentially log the failed intent details
-        if intent:
-            intent.error_message = "Pathfinding failed."
-            # The agent itself might have a cooldown or retry logic here,
-            # but for now, this behavior just signals the intent has failed.
+        if not intent or not hasattr(intent, 'target_position'):
+            self.agent.logger.error(f"Agent {self.agent.id} entered PathFailedBehavior without a valid intent with a target position.")
+            # Immediately fail if there's no valid intent to work with.
+            self.failed_intent = None # Ensure it's None
+            return
+
+        self.failed_intent = intent
+        self.retry_count = 0
+        self.retry_timer = 0.0
+
+        # Strategy 1: If target is unwalkable, find a new one.
+        target_pos = getattr(self.failed_intent, 'target_position', None)
+        if target_pos and not self.agent.grid.is_walkable(int(target_pos.x), int(target_pos.y)):
+            self.agent.logger.info(f"Agent {self.agent.id} PathFailed: Target {target_pos} is unwalkable. Searching for a new target.")
+            new_target = find_closest_walkable_tile(
+                target_pos,
+                self.agent.config.PATHFINDING_NEW_TARGET_SEARCH_RADIUS,
+                self.agent.grid
+            )
+            if new_target:
+                self.agent.logger.info(f"Agent {self.agent.id} PathFailed: Found new walkable target at {new_target}. Updating intent and transitioning to MovingBehavior.")
+                self.failed_intent.target_position = new_target # type: ignore
+                # Immediately try to move to the new target
+                self.agent._transition_behavior(MovingBehavior, self.failed_intent)
+                return # Exit enter() as we've already transitioned
+
+        # Strategy 2: If target is walkable or no new target was found, set up for retry.
+        self.agent.logger.info(f"Agent {self.agent.id} PathFailed: Setting up for retry logic.")
+        self.retry_timer = self.agent.config.PATHFINDING_RETRY_DELAY
+
 
     def update(self, dt: float, resource_manager: 'ResourceManager') -> Optional[IntentStatus]:
-        # This state immediately signals the failure of the intent that led to it.
-        # The agent's IntentProcessor would then decide what to do next (e.g., go idle, try alternative).
-        return IntentStatus.FAILED
+        if not self.failed_intent:
+            return IntentStatus.FAILED # Should have been caught in enter, but as a safeguard.
+
+        if self.retry_timer > 0:
+            self.retry_timer -= dt
+            return None # Waiting for the timer to expire
+
+        # Timer has expired, let's try to repath
+        if self.retry_count < self.agent.config.PATHFINDING_MAX_RETRIES:
+            self.retry_count += 1
+            self.agent.logger.info(f"Agent {self.agent.id} PathFailed: Attempting retry {self.retry_count}/{self.agent.config.PATHFINDING_MAX_RETRIES} for intent {self.failed_intent.intent_id}.")
+
+            # Attempt to find a path again
+            path = self.agent.grid.find_path(self.agent.position, self.failed_intent.target_position) # type: ignore
+
+            if path:
+                self.agent.logger.info(f"Agent {self.agent.id} PathFailed: Retry successful. Path found. Transitioning to MovingBehavior.")
+                self.agent.current_path = path
+                self.agent.target_position = path[-1] if path else None
+                self.agent._transition_behavior(MovingBehavior, self.failed_intent)
+                return None # Behavior is done, new one is queued
+            else:
+                self.agent.logger.warning(f"Agent {self.agent.id} PathFailed: Retry {self.retry_count} failed. Resetting timer.")
+                self.retry_timer = self.agent.config.PATHFINDING_RETRY_DELAY # Reset timer for next attempt
+                return None
+        else:
+            # Strategy 3: Give up
+            self.agent.logger.error(f"Agent {self.agent.id} PathFailed: All retries failed for intent {self.failed_intent.intent_id}. Marking as FAILED.")
+            self.failed_intent.error_message = "Pathfinding failed after multiple retries."
+            return IntentStatus.FAILED
 
     def exit(self):
         self.agent.logger.debug(f"Agent {self.agent.id} exiting PathFailedBehavior.")
+        self.failed_intent = None
+        self.retry_count = 0
+        self.retry_timer = 0.0
 
 class EvaluatingIntentBehavior(AgentBehavior):
     """Behavior for when the agent is evaluating its current intent or needs to fetch a new one."""

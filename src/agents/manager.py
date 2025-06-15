@@ -25,6 +25,7 @@ class AgentManager:
         self.task_manager_ref: 'TaskManager' = task_manager # Store task_manager reference
         # self.occupancy_grid = occupancy_grid # Removed
         self.logger = logging.getLogger(__name__) # Added
+        self.next_agent_number = 1
 
     def add_agent(self, agent: Agent):
         """Adds an existing Agent instance to the manager."""
@@ -49,17 +50,21 @@ class AgentManager:
             Agent: The newly created agent instance.
         """
         agent_id = uuid.uuid4()
+        agent_name = f"Agent-{self.next_agent_number}"
+        self.next_agent_number += 1
+
         if resource_priorities is None:
             # Provide a default if not specified, e.g. based on global config or common resources
             resource_priorities = [ResourceType.BERRY, ResourceType.WHEAT]
 
         # Validate agent spawn position
         if not self.grid.is_walkable(int(position.x), int(position.y)):
-            self.logger.warning(f"Attempting to spawn agent {agent_id} at non-walkable position {position}. This may lead to issues.")
+            self.logger.warning(f"Attempting to spawn agent {agent_name} ({agent_id}) at non-walkable position {position}. This may lead to issues.")
             # Optionally, add logic here to find a nearby walkable tile or prevent spawning.
 
         new_agent = Agent(
             agent_id=agent_id,
+            agent_name=agent_name,
             position=position,
             speed=speed,
             grid=self.grid,
@@ -68,7 +73,7 @@ class AgentManager:
             resource_priorities=resource_priorities
         )
         self.add_agent(new_agent)
-        self.logger.info(f"Created agent {agent_id} at {position}") # Changed
+        self.logger.info(f"Created agent {agent_name} ({agent_id}) at {position}") # Changed
         return new_agent
 
     def update_agents(self, dt: float, resource_manager): # resource_manager type hint can be added

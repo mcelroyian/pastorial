@@ -50,7 +50,6 @@ def find_path(start_pos: pygame.math.Vector2, end_pos: pygame.math.Vector2, grid
     # Pathfinding should be allowed from the start_pos even if it's "occupied" by the agent itself.
     # The critical check is for the end_pos and intermediate steps.
     if not grid.is_walkable(int(end_pos.x), int(end_pos.y)):
-        logger.warning(f"find_path: End position {end_pos} is not walkable. Pathfinding aborted.")
         return None # Pathfinding aborted if end is not walkable
     
     start_node = Node(start_pos)

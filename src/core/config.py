@@ -10,6 +10,11 @@ SCREEN_SPAWN_MARGIN = 50  # Margin around the screen for spawning
 # Frame rate and timing
 TARGET_FPS = 60
 
+# Logging Settings
+LOG_TO_FILE = True # Master switch for logging to a file
+LOG_FILE_PATH = "simulation.log" # Path to the log file
+LOG_FILE_MODE = "w" # "w" for overwrite, "a" for append
+
 # Grid settings
 GRID_CELL_SIZE = 32
 GRID_WIDTH = SCREEN_WIDTH // GRID_CELL_SIZE
@@ -73,3 +78,7 @@ MAX_ACTIVE_PROCESS_WHEAT_TASKS = 2 # Max concurrent tasks to take wheat to mill
 # Agent Action Timings (continued)
 DEFAULT_COLLECTION_TIME_FROM_STORAGE = 1.5 # Seconds to collect from a storage point
 DEFAULT_STORAGE_CAPACITY = 50
+# Pathfinding Failure Recovery Settings
+PATHFINDING_MAX_RETRIES = 3  # Max number of times to retry a failed path
+PATHFINDING_RETRY_DELAY = 1.0  # Seconds to wait before a retry
+PATHFINDING_NEW_TARGET_SEARCH_RADIUS = 5 # Max grid cells to search for an alternative walkable tile
