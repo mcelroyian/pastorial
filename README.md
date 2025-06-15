@@ -1,3 +1,8 @@
+ # Pastorial
+ Resource Simulator
+
+ https://mcelroyian.github.io/pastorial/
+
 Need to start uv to run
 ```
 source .venv/bin/activate
