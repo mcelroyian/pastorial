@@ -11,9 +11,10 @@ SCREEN_SPAWN_MARGIN = 50  # Margin around the screen for spawning
 TARGET_FPS = 60
 
 # Logging Settings
-LOG_TO_FILE = True # Master switch for logging to a file
-LOG_FILE_PATH = "simulation.log" # Path to the log file
+LOG_TO_FILE = False
+LOG_FILE_PATH = "simulation.log" 
 LOG_FILE_MODE = "w" # "w" for overwrite, "a" for append
+LOG_TO_CONSOLE = False
 
 # Grid settings
 GRID_CELL_SIZE = 32

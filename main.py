@@ -12,13 +12,13 @@ def main():
     # - Default log level is INFO.
     # - Set 'src.agents.agent' logger to DEBUG for more detailed agent logs.
     per_module_log_levels = {
-        "src.agents.agent": logging.DEBUG,
+        "src.agents.agent": logging.INFO,
         "src.agents.agent_behaviors": logging.INFO,
-        "src.resources.storage_point": logging.DEBUG, # Changed for StoragePoint debugging
+        "src.resources.storage_point": logging.INFO, # Changed for StoragePoint debugging
         "src.resources.node": logging.INFO,
         "src.pathfinding.astar": logging.INFO,
-        "src.tasks.task_manager": logging.DEBUG, # Added for TaskManager debugging
-        "src.tasks.task": logging.DEBUG # Added for Task debugging
+        "src.tasks.task_manager": logging.INFO, # Added for TaskManager debugging
+        "src.tasks.task": logging.INFO # Added for Task debugging
     }
     setup_logging(default_level=logging.INFO, per_module_levels=per_module_log_levels)
     logger = logging.getLogger(__name__) # Added

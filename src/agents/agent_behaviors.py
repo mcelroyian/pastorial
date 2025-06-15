@@ -88,6 +88,8 @@ class MovingBehavior(AgentBehavior):
                     int(round(random_target_y))
                 )
                 self.agent.logger.info(f"Agent {self.agent.id} MovingBehavior: RandomMoveIntent, generated target {target_pos}")
+                # BUGFIX: Store the generated target on the intent itself so PathFailedBehavior can access it.
+                self.move_intent.target_position = target_pos # type: ignore
                 self.agent.set_target(target_pos)
             else:
                 self.agent.logger.error(f"Agent {self.agent.id} MovingBehavior: RandomMoveIntent but grid is invalid. Cannot set target.")

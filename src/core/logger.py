@@ -34,19 +34,18 @@ def setup_logging(default_level=DEFAULT_LOG_LEVEL, per_module_levels=None):
     # Use the custom formatter
     formatter = AgentIdFormatter(LOG_FORMAT)
 
-    # Console Handler
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(formatter)
-
     # Get the root logger
     root_logger = logging.getLogger()
     root_logger.setLevel(default_level)
 
     # Add handlers to the root logger
     if not root_logger.hasHandlers(): # Avoid adding multiple handlers if called more than once
-        root_logger.addHandler(console_handler)
+        
+        if config.LOG_TO_CONSOLE:
+            console_handler = logging.StreamHandler(sys.stdout)
+            console_handler.setFormatter(formatter)
+            root_logger.addHandler(console_handler)
 
-        # File Handler (optional, based on config)
         if config.LOG_TO_FILE:
             file_handler = logging.FileHandler(config.LOG_FILE_PATH, mode=config.LOG_FILE_MODE)
             file_handler.setFormatter(formatter)
