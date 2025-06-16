@@ -135,150 +135,52 @@ class GameLoop:
         if user_actions['toggle_panel']:
             self.show_task_panel = not self.show_task_panel
 
+    def _spawn_entity(self, entity_class, num_to_spawn, **kwargs):
+        """
+        Generic function to spawn a specified number of entities of a given class.
+        """
+        entity_name = entity_class.__name__
+        self.logger.info(f"Attempting to spawn {num_to_spawn} {entity_name}(s)...")
+
+        entity_grid_width = getattr(entity_class, 'GRID_WIDTH', 1)
+        entity_grid_height = getattr(entity_class, 'GRID_HEIGHT', 1)
+
+        available_spots = self._find_available_spawn_points(entity_grid_width, entity_grid_height)
+
+        if not available_spots:
+            self.logger.warning(f"No available space found to spawn any {entity_name}s of size {entity_grid_width}x{entity_grid_height}.")
+            return
+
+        random.shuffle(available_spots)
+        
+        spawned_count = 0
+        for i in range(min(num_to_spawn, len(available_spots))):
+            pos_vec = available_spots[i]
+            gx, gy = int(pos_vec.x), int(pos_vec.y)
+            
+            entity = entity_class(pos_vec, **kwargs)
+            
+            if isinstance(entity, (Mill, Bakery)):
+                self.resource_manager.add_processing_station(entity)
+            else:
+                self.resource_manager.add_node(entity)
+
+            self.grid.update_occupancy(entity, gx, gy, entity_grid_width, entity_grid_height, is_placing=True)
+            self.logger.debug(f"Spawned {entity_name} (size {entity_grid_width}x{entity_grid_height}) at grid_pos: {pos_vec}")
+            spawned_count += 1
+
+        if spawned_count < num_to_spawn:
+            self.logger.warning(f"Successfully spawned {spawned_count} out of {num_to_spawn} desired {entity_name}s due to limited available space.")
+        elif spawned_count > 0:
+            self.logger.info(f"Successfully spawned {spawned_count} {entity_name}(s).")
+
     def _spawn_initial_resources(self):
-        """Creates and places the initial resource nodes, updating occupancy grid."""
-        self.logger.info(f"Spawning {config.INITIAL_BERRY_BUSHES} berry bushes...") # Changed
-        spawn_margin = config.SCREEN_SPAWN_MARGIN # Avoid spawning too close to screen edges
-        
-        # BerryBushes are 1x1
-        entity_grid_width = 1
-        entity_grid_height = 1
-        
-        spawned_bushes = 0
-        spawned_wheat_fields = 0
-        attempts = 0
-        max_attempts = config.INITIAL_BERRY_BUSHES * 5 # Try a few times per bush
-
-        while spawned_bushes < config.INITIAL_BERRY_BUSHES and attempts < max_attempts:
-            attempts += 1
-            screen_pos_x = random.uniform(spawn_margin, config.SCREEN_WIDTH - spawn_margin)
-            screen_pos_y = random.uniform(spawn_margin, config.SCREEN_HEIGHT - spawn_margin)
-            screen_position = pygame.Vector2(screen_pos_x, screen_pos_y)
-            grid_position = self.grid.screen_to_grid(screen_position)
-            gx, gy = int(grid_position.x), int(grid_position.y)
-
-            if self.grid.is_area_free(gx, gy, entity_grid_width, entity_grid_height):
-                bush = BerryBush(grid_position)
-                self.resource_manager.add_node(bush)
-                self.grid.update_occupancy(bush, gx, gy, entity_grid_width, entity_grid_height, is_placing=True)
-                self.logger.debug(f"Spawned BerryBush at grid_pos: {grid_position}") # Changed
-                spawned_bushes += 1
-            # else: # Optional: log failed attempt
-                # self.logger.debug(f"Failed to spawn BerryBush at {grid_position}, area occupied. Attempt {attempts}") # Changed
-        if spawned_bushes < config.INITIAL_BERRY_BUSHES:
-            self.logger.warning(f"Could only spawn {spawned_bushes}/{config.INITIAL_BERRY_BUSHES} berry bushes after {max_attempts} attempts.") # Changed
-
-
-        # Spawn WheatFields
-        num_wheat_fields = config.INITIAL_WHEAT_FIELD # Example number
-        max_attempts_wheat = num_wheat_fields # Define max_attempts_wheat based on the loop iterations
-        self.logger.info(f"Spawning {num_wheat_fields} wheat fields...") # Changed
-        for _ in range(num_wheat_fields):
-            screen_pos_x = random.uniform(spawn_margin, config.SCREEN_WIDTH - spawn_margin)
-            screen_pos_y = random.uniform(spawn_margin, config.SCREEN_HEIGHT - spawn_margin)
-            grid_position = self.grid.screen_to_grid(pygame.Vector2(screen_pos_x, screen_pos_y))
-            gx, gy = int(grid_position.x), int(grid_position.y)
-
-            # WheatFields are 1x1
-            entity_grid_width = 1 # Assuming WheatField is 1x1
-            entity_grid_height = 1
-
-            if self.grid.is_area_free(gx, gy, entity_grid_width, entity_grid_height):
-                wheat_field = WheatField(grid_position)
-                self.resource_manager.add_node(wheat_field)
-                self.grid.update_occupancy(wheat_field, gx, gy, entity_grid_width, entity_grid_height, is_placing=True)
-                self.logger.debug(f"Spawned WheatField at grid_pos: {grid_position}") # Changed
-                spawned_wheat_fields +=1
-            # else: # Optional: log failed attempt
-                # self.logger.debug(f"Failed to spawn WheatField at {grid_position}, area occupied. Attempt {attempts_wheat}") # Changed
-        
-        if spawned_wheat_fields < num_wheat_fields:
-             self.logger.warning(f"Could only spawn {spawned_wheat_fields}/{num_wheat_fields} wheat fields after {max_attempts_wheat} attempts.") # Changed
-
-        # Spawn Wells
-        spawned_wells = 0
-        attempts_wells = 0
-        max_spawn_attempts = config.INITIAL_WELLS * 5
-        while spawned_wells < config.INITIAL_WELLS and attempts_wells < max_spawn_attempts:
-            attempts_wells += 1
-            screen_pos_x = random.uniform(spawn_margin, config.SCREEN_WIDTH - spawn_margin)
-            screen_pos_y = random.uniform(spawn_margin, config.SCREEN_HEIGHT - spawn_margin)
-            screen_position = pygame.Vector2(screen_pos_x, screen_pos_y)
-            grid_position = self.grid.screen_to_grid(screen_position)
-            gx, gy = int(grid_position.x), int(grid_position.y)
-
-            # Wells are 1x1
-            entity_grid_width = 1
-            entity_grid_height = 1
-
-            if self.grid.is_area_free(gx, gy, WaterSource.GRID_WIDTH, WaterSource.GRID_HEIGHT):
-                well = WaterSource(grid_position)
-                self.resource_manager.add_node(well)
-                self.grid.update_occupancy(well, gx, gy, WaterSource.GRID_WIDTH, WaterSource.GRID_HEIGHT, is_placing=True)
-                self.logger.debug(f"Spawned WaterSource (Well) at grid_pos: {grid_position}")
-                spawned_wells += 1
-
-        if spawned_wells < config.INITIAL_WELLS:
-            self.logger.warning(f"Could not spawn all initial wells. Succeeded: {spawned_wells}/{config.INITIAL_WELLS}")
-
-
-        # Spawn Mills - New dynamic spawning logic
-        self.logger.info(f"Attempting to spawn {config.DESIRED_NUM_MILLS} mills...") # Changed
-        mill_width = Mill.GRID_WIDTH
-        mill_height = Mill.GRID_HEIGHT
-        
-        available_mill_spots = self._find_available_spawn_points(mill_width, mill_height)
-        
-        if not available_mill_spots:
-            self.logger.warning(f"No available space found to spawn any mills of size {mill_width}x{mill_height}.") # Changed
-        else:
-            random.shuffle(available_mill_spots) # Shuffle for random placement from available spots
-            
-            spawned_mills_count = 0
-            # Attempt to spawn up to the desired number of mills, or fewer if not enough spots
-            for i in range(min(config.DESIRED_NUM_MILLS, len(available_mill_spots))):
-                pos_vec = available_mill_spots[i] # Get a pre-validated spot
-                gx, gy = int(pos_vec.x), int(pos_vec.y)
-                
-                mill = Mill(pos_vec) # Position is top-left grid coordinates
-                self.resource_manager.add_processing_station(mill)
-                self.grid.update_occupancy(mill, gx, gy, mill_width, mill_height, is_placing=True)
-                self.logger.debug(f"Spawned Mill (size {mill_width}x{mill_height}) at grid_pos: {pos_vec}") # Changed
-                spawned_mills_count += 1
-
-            if spawned_mills_count < config.DESIRED_NUM_MILLS and len(available_mill_spots) > 0 :
-                self.logger.warning(f"Successfully spawned {spawned_mills_count} out of {config.DESIRED_NUM_MILLS} desired mills due to limited available space.") # Changed
-            elif spawned_mills_count > 0:
-                 self.logger.info(f"Successfully spawned {spawned_mills_count} mills.") # Changed
-            # If spawned_mills_count is 0 and available_mill_spots was empty, the initial warning covers it.
-
-        # Spawn Bakeries
-        self.logger.info(f"Attempting to spawn {config.INITIAL_BAKERIES} bakeries...")
-        bakery_width = Bakery.GRID_WIDTH
-        bakery_height = Bakery.GRID_HEIGHT
-        
-        available_bakery_spots = self._find_available_spawn_points(bakery_width, bakery_height)
-        
-        if not available_bakery_spots:
-            self.logger.warning(f"No available space found to spawn any bakeries of size {bakery_width}x{bakery_height}.")
-        else:
-            random.shuffle(available_bakery_spots)
-            
-            spawned_bakeries_count = 0
-            for i in range(min(config.INITIAL_BAKERIES, len(available_bakery_spots))):
-                pos_vec = available_bakery_spots[i]
-                gx, gy = int(pos_vec.x), int(pos_vec.y)
-                
-                bakery = Bakery(pos_vec)
-                self.resource_manager.add_processing_station(bakery)
-                self.grid.update_occupancy(bakery, gx, gy, bakery_width, bakery_height, is_placing=True)
-                self.logger.debug(f"Spawned Bakery (size {bakery_width}x{bakery_height}) at grid_pos: {pos_vec}")
-                spawned_bakeries_count += 1
-
-            if spawned_bakeries_count < config.INITIAL_BAKERIES:
-                self.logger.warning(f"Successfully spawned {spawned_bakeries_count} out of {config.INITIAL_BAKERIES} desired bakeries due to limited available space.")
-            elif spawned_bakeries_count > 0:
-                 self.logger.info(f"Successfully spawned {spawned_bakeries_count} bakeries.")
+        """Creates and places the initial resource nodes using the generic spawn function."""
+        self._spawn_entity(BerryBush, config.INITIAL_BERRY_BUSHES)
+        self._spawn_entity(WheatField, config.INITIAL_WHEAT_FIELD)
+        self._spawn_entity(WaterSource, config.INITIAL_WELLS)
+        self._spawn_entity(Mill, config.DESIRED_NUM_MILLS)
+        self._spawn_entity(Bakery, config.INITIAL_BAKERIES)
 
     def _spawn_initial_storage_points(self):
         """Creates and places the initial storage points."""
