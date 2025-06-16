@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from ..resources.manager import ResourceManager # Assuming manager.py is in src/resources/
     from ..resources.node import ResourceNode
     from ..resources.storage_point import StoragePoint
+    from ..resources.processing import ProcessingStation
     # from ..agents.intents import Intent # Already imported
 
 class Task(ABC):
@@ -96,7 +97,7 @@ class GatherAndDeliverTask(Task):
         
         # These will be populated during prepare() or if pre-assigned
         self.target_resource_node_ref: Optional['ResourceNode'] = None
-        self.target_dropoff_ref: Optional['StoragePoint'] = None # Or ProcessingStation
+        self.target_dropoff_ref: Optional['StoragePoint' | 'ProcessingStation'] = None
 
         self.quantity_gathered: int = 0
         self.quantity_delivered: int = 0
@@ -153,23 +154,22 @@ class GatherAndDeliverTask(Task):
 
         # 2. Find and Reserve Space at Dropoff
         if not self.target_dropoff_ref:
-            # Simplified finding logic.
-            # TODO: Implement sophisticated dropoff finding (accepts type, has space, nearest)
-            # For now, assume resource_manager can provide a suitable storage point.
-            # This part needs robust implementation.
-            
-            # Placeholder: Find the first storage point that can accept the resource
-            # This should ideally consider the quantity we intend to gather.
-            # The quantity to reserve was calculated above.
-
-            all_storage_points = resource_manager.storage_points # Assuming direct access
-            for sp in sorted(all_storage_points, key=lambda s: (s.position - agent.position).length_squared()):
-                # reserve_space should check accepted types and available capacity
-                reserved_amount = sp.reserve_space(self.task_id, self.resource_type_to_gather, qty_to_reserve_for_delivery)
-                if reserved_amount > 0:
-                    self.target_dropoff_ref = sp
-                    self.reserved_at_dropoff_quantity = reserved_amount
+            # More generic dropoff finding
+            all_dropoffs = resource_manager.storage_points + resource_manager.processing_stations
+            for dropoff in sorted(all_dropoffs, key=lambda d: (d.position - agent.position).length_squared()):
+                if hasattr(dropoff, 'can_accept_input') and dropoff.can_accept_input(self.resource_type_to_gather, 1):
+                    # This is a processing station. We don't reserve space here in the same way.
+                    # For now, we'll just assign it as the target.
+                    # A more robust system would have a unified reservation interface.
+                    self.target_dropoff_ref = dropoff
+                    self.reserved_at_dropoff_quantity = qty_to_reserve_for_delivery # Assume we can deliver this much
                     break
+                elif hasattr(dropoff, 'reserve_space'): # This is a StoragePoint
+                    reserved_amount = dropoff.reserve_space(self.task_id, self.resource_type_to_gather, qty_to_reserve_for_delivery)
+                    if reserved_amount > 0:
+                        self.target_dropoff_ref = dropoff
+                        self.reserved_at_dropoff_quantity = reserved_amount
+                        break
         
         if not self.target_dropoff_ref or self.reserved_at_dropoff_quantity == 0:
             self.error_message = f"Could not find or reserve space at dropoff for {self.resource_type_to_gather.name} (wanted to reserve {qty_to_reserve_for_delivery})."
@@ -362,9 +362,14 @@ class GatherAndDeliverTask(Task):
 
                 amount_to_deliver = agent.current_inventory.get('quantity', 0)
                 if amount_to_deliver > 0 and agent.current_inventory.get('resource_type') == self.resource_type_to_gather:
-                    delivered_qty = self.target_dropoff_ref.commit_reservation_to_storage(
-                        self.task_id, self.resource_type_to_gather, amount_to_deliver
-                    )
+                    if hasattr(self.target_dropoff_ref, 'commit_reservation_to_storage'):
+                        delivered_qty = self.target_dropoff_ref.commit_reservation_to_storage(
+                            self.task_id, self.resource_type_to_gather, amount_to_deliver
+                        )
+                    elif hasattr(self.target_dropoff_ref, 'receive'):
+                        delivered_qty = self.target_dropoff_ref.receive(self.resource_type_to_gather, amount_to_deliver)
+                    else:
+                        delivered_qty = 0
                     if delivered_qty > 0:
                         agent.current_inventory['quantity'] = agent.current_inventory.get('quantity', 0) - delivered_qty # type: ignore
                         self.quantity_delivered += delivered_qty

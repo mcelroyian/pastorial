@@ -7,6 +7,7 @@ from .task import Task, GatherAndDeliverTask, DeliverWheatToMillTask # Added Del
 from .task_types import TaskType, TaskStatus
 from ..resources.resource_types import ResourceType # Assuming this path
 from ..resources.mill import Mill # For checking Mill instances
+from ..resources.processing import MultiInputProcessingStation
 from ..core import config # For task generation settings
 from ..agents.intents import IntentStatus # For type hinting
 
@@ -82,6 +83,7 @@ class TaskManager:
         self.add_task(task)
         self.logger.debug(f"TaskManager: Created DeliverWheatToMillTask {task.task_id} for {quantity} WHEAT, P:{priority}.") # Changed
         return task
+
 
     # def request_task_for_agent(self, agent: 'Agent') -> Optional[Task]:
     #     """
@@ -416,7 +418,35 @@ class TaskManager:
         else:
             self.logger.debug(f"FLOUR_TASK: Flour stock ({current_flour_stock}) is sufficient (>= {min_flour_stock_config}). No new DeliverWheatToMill task needed.") # Changed
 
-        # TODO: Future: Add logic for other resource types here, following a similar pattern.
+        # --- Recipe-based Task Generation ---
+        for station in self.resource_manager_ref.processing_stations:
+            if isinstance(station, MultiInputProcessingStation):
+                for resource_type, required_qty in station.recipe.inputs.items():
+                    # Quick fix: Don't generate gather tasks for flour, it's handled by stock levels
+                    if resource_type == ResourceType.FLOUR_POWDER:
+                        continue
+
+                    current_qty = station.current_input_quantity.get(resource_type, 0)
+                    if current_qty < required_qty:
+                        # How many are needed to satisfy the recipe?
+                        needed_qty = required_qty - current_qty
+
+                        # Are there already tasks to deliver this resource to this station?
+                        active_delivery_qty = 0
+                        for task in self.pending_tasks + list(self.assigned_tasks.values()):
+                            if isinstance(task, GatherAndDeliverTask) and \
+                               task.resource_type_to_gather == resource_type and \
+                               task.target_dropoff_ref and task.target_dropoff_ref.id == station.id:
+                                active_delivery_qty += task.quantity_to_gather
+
+                        if needed_qty > active_delivery_qty:
+                            self.logger.info(f"Station {station.id} needs {needed_qty - active_delivery_qty} of {resource_type.name}. Creating GatherAndDeliverTask.")
+                            self.create_gather_task(
+                                resource_type=resource_type,
+                                quantity=int(needed_qty - active_delivery_qty),
+                                priority=config.PROVISION_TASK_PRIORITY, # We can reuse this
+                                target_dropoff_id=station.id
+                            )
 
 
     def get_task_by_id(self, task_id: uuid.UUID) -> Optional[Task]:

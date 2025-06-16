@@ -1,9 +1,10 @@
 import pygame
 import logging # Added
 import uuid # Added for unique id
-from typing import Optional
-from ..resources.resource_types import ResourceType
-from ..core import config # For potential future use, e.g. visual configuration
+from typing import Optional, Dict
+from src.resources.resource_types import ResourceType
+from src.core import config # For potential future use, e.g. visual configuration
+from .recipe import Recipe
 
 class ProcessingStation:
     """
@@ -177,3 +178,158 @@ class ProcessingStation:
     def __repr__(self):
        return (f"{self.__class__.__name__}(position={self.position}, "
                f"input_type={self.accepted_input_type.name}, output_type={self.produced_output_type.name})")
+
+class MultiInputProcessingStation(ProcessingStation):
+    """
+    A processing station that uses a data-driven recipe to define its
+    inputs and outputs. It can handle multiple types of input resources.
+    """
+    def __init__(self,
+                 position: pygame.Vector2,
+                 recipe: Recipe,
+                 processing_speed: int,
+                 input_capacity: int,
+                 output_capacity: int):
+        """
+        Initializes a MultiInputProcessingStation.
+
+        Args:
+            position: The position of the station on the grid.
+            recipe: The Recipe object defining inputs and outputs.
+            processing_speed: Ticks required to complete one processing cycle.
+            input_capacity: Maximum amount of each input resource the station can hold.
+            output_capacity: Maximum amount of each output resource the station can hold.
+        """
+        # We need to call the parent __init__ but some of its parameters are now
+        # derived from the recipe. We'll use the first input/output type as a placeholder.
+        first_input_type = next(iter(recipe.inputs)) if recipe.inputs else None
+        first_output_type = next(iter(recipe.outputs)) if recipe.outputs else None
+
+        super().__init__(
+            position=position,
+            accepted_input_type=first_input_type,
+            produced_output_type=first_output_type,
+            conversion_ratio=1.0,  # Not directly used; logic is in the recipe
+            processing_speed=processing_speed,
+            input_capacity=input_capacity,
+            output_capacity=output_capacity
+        )
+
+        self.recipe = recipe
+        # Override storage to handle multiple resource types
+        self.current_input_quantity: Dict[str, float] = {resource_type: 0.0 for resource_type in self.recipe.inputs}
+        self.current_output_quantity: Dict[str, float] = {resource_type: 0.0 for resource_type in self.recipe.outputs}
+
+    def _has_required_inputs(self) -> bool:
+        """Checks if the station has enough of all required inputs for one cycle."""
+        for resource_type, required_qty in self.recipe.inputs.items():
+            if self.current_input_quantity.get(resource_type, 0.0) < required_qty:
+                return False
+        return True
+
+    def _has_output_space(self) -> bool:
+        """Checks if there is enough space for all outputs of one cycle."""
+        for resource_type, produced_qty in self.recipe.outputs.items():
+            if self.current_output_quantity.get(resource_type, 0.0) + produced_qty > self.output_capacity:
+                return False
+        return True
+
+    def tick(self):
+        """
+        Handles the processing logic per simulation tick based on the recipe.
+        """
+        if self._has_required_inputs() and self._has_output_space():
+            self.is_processing = True
+            self.processing_progress += 1
+            if self.processing_progress >= self.processing_speed:
+                # Consume inputs
+                for resource_type, required_qty in self.recipe.inputs.items():
+                    self.current_input_quantity[resource_type] -= required_qty
+                
+                # Produce outputs
+                for resource_type, produced_qty in self.recipe.outputs.items():
+                    self.current_output_quantity[resource_type] += produced_qty
+
+                self.processing_progress = 0
+                self.logger.debug(f"{self} processed recipe. Inputs: {self.current_input_quantity}, Outputs: {self.current_output_quantity}")
+        else:
+            self.is_processing = False
+            self.processing_progress = 0
+
+    def receive(self, resource_type: ResourceType, quantity: int) -> bool:
+        """
+        Adds input resources to the station if the type is in the recipe and there's capacity.
+        """
+        if resource_type in self.recipe.inputs and self.current_input_quantity.get(resource_type, 0.0) < self.input_capacity:
+            amount_to_add = min(float(quantity), self.input_capacity - self.current_input_quantity[resource_type])
+            if amount_to_add > 0:
+                self.current_input_quantity[resource_type] += amount_to_add
+                self.logger.debug(f"{self} received {amount_to_add} of {resource_type}. Input cache: {self.current_input_quantity[resource_type]}")
+                return True
+        self.logger.debug(f"{self} FAILED to receive {quantity} of {resource_type}. Check recipe or capacity.")
+        return False
+
+    def can_accept_input(self, resource_type: ResourceType, quantity: int = 1) -> bool:
+        """Checks if the station can accept the given resource type and has space."""
+        if resource_type not in self.recipe.inputs:
+            return False
+        return (self.current_input_quantity.get(resource_type, 0.0) + quantity) <= self.input_capacity
+
+    def has_output(self) -> bool:
+        """Checks if there are any processed goods to collect."""
+        for resource_type in self.recipe.outputs:
+            if self.current_output_quantity.get(resource_type, 0.0) >= 1.0:
+                return True
+        return False
+
+    def dispense(self, requested_quantity: int, resource_type: ResourceType) -> int:
+        """
+        Allows an agent to collect a specific type of processed output resource.
+        """
+        if resource_type not in self.recipe.outputs:
+            return 0
+
+        available_integer_output = int(self.current_output_quantity.get(resource_type, 0.0))
+        amount_to_dispense = min(requested_quantity, available_integer_output)
+
+        if amount_to_dispense > 0:
+            self.current_output_quantity[resource_type] -= float(amount_to_dispense)
+            self.logger.debug(f"{self} dispensed {amount_to_dispense} of {resource_type}. Output cache: {self.current_output_quantity[resource_type]}")
+            return amount_to_dispense
+        return 0
+
+    def draw(self, surface: pygame.Surface, font: pygame.font.Font):
+        """
+        Draws the multi-input processing station on the given surface.
+        """
+        rect_x = self.position.x * config.GRID_CELL_SIZE
+        rect_y = self.position.y * config.GRID_CELL_SIZE
+        station_rect = pygame.Rect(rect_x, rect_y, config.GRID_CELL_SIZE, config.GRID_CELL_SIZE)
+
+        current_color = self.processing_color if self.is_processing else self.color
+        pygame.draw.rect(surface, current_color, station_rect)
+        pygame.draw.rect(surface, config.COLOR_BLACK, station_rect, 1)
+
+        # Simplified display for multiple inputs/outputs
+        # TODO: A more robust UI for this might be needed
+        num_input_types = len(self.recipe.inputs)
+        input_text = f"I:{num_input_types}"
+        input_surface = font.render(input_text, True, config.DEBUG_TEXT_COLOR)
+        surface.blit(input_surface, (rect_x + 2, rect_y + 2))
+
+        num_output_types = len(self.recipe.outputs)
+        output_text = f"O:{num_output_types}"
+        output_surface = font.render(output_text, True, config.DEBUG_TEXT_COLOR)
+        surface.blit(output_surface, (rect_x + 2, rect_y + config.GRID_CELL_SIZE - 18))
+
+        if self.is_processing:
+            progress_text_str = f"{self.processing_progress}/{self.processing_speed}"
+            progress_surface = font.render(progress_text_str, True, config.DEBUG_TEXT_COLOR)
+            progress_rect = progress_surface.get_rect(center=station_rect.center)
+            surface.blit(progress_surface, progress_rect)
+
+    def __str__(self):
+        return (f"{self.__class__.__name__} at {self.position} "
+                f"Inputs: {self.current_input_quantity}, "
+                f"Outputs: {self.current_output_quantity}, "
+                f"State: {self.get_visual_state()} ({self.processing_progress}/{self.processing_speed})")
