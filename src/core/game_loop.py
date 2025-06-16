@@ -12,6 +12,7 @@ from src.rendering import debug_display as debug_renderer
 from src.resources.manager import ResourceManager
 from src.resources.berry_bush import BerryBush
 from src.resources.wheat_field import WheatField # Added WheatField
+from src.resources.water_source import WaterSource
 from src.resources.mill import Mill # Added Mill
 from src.agents.manager import AgentManager # Added AgentManager
 from src.tasks.task_manager import TaskManager # Added TaskManager
@@ -192,6 +193,32 @@ class GameLoop:
         
         if spawned_wheat_fields < num_wheat_fields:
              self.logger.warning(f"Could only spawn {spawned_wheat_fields}/{num_wheat_fields} wheat fields after {max_attempts_wheat} attempts.") # Changed
+
+        # Spawn Wells
+        spawned_wells = 0
+        attempts_wells = 0
+        max_spawn_attempts = config.INITIAL_WELLS * 5
+        while spawned_wells < config.INITIAL_WELLS and attempts_wells < max_spawn_attempts:
+            attempts_wells += 1
+            screen_pos_x = random.uniform(spawn_margin, config.SCREEN_WIDTH - spawn_margin)
+            screen_pos_y = random.uniform(spawn_margin, config.SCREEN_HEIGHT - spawn_margin)
+            screen_position = pygame.Vector2(screen_pos_x, screen_pos_y)
+            grid_position = self.grid.screen_to_grid(screen_position)
+            gx, gy = int(grid_position.x), int(grid_position.y)
+
+            # Wells are 1x1
+            entity_grid_width = 1
+            entity_grid_height = 1
+
+            if self.grid.is_area_free(gx, gy, entity_grid_width, entity_grid_height):
+                well = WaterSource(grid_position)
+                self.resource_manager.add_node(well)
+                self.grid.update_occupancy(well, gx, gy, entity_grid_width, entity_grid_height, is_placing=True)
+                self.logger.debug(f"Spawned WaterSource (Well) at grid_pos: {grid_position}")
+                spawned_wells += 1
+
+        if spawned_wells < config.INITIAL_WELLS:
+            self.logger.warning(f"Could not spawn all initial wells. Succeeded: {spawned_wells}/{config.INITIAL_WELLS}")
 
 
         # Spawn Mills - New dynamic spawning logic

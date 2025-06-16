@@ -39,6 +39,11 @@ DESIRED_NUM_MILLS = 2 # Default desired number of mills
 WHEAT_GENERATION_INTERVAL = 12 # How many simulation ticks to generate 1 unit of wheat
 WHEAT_FIELD_CAPACITY = 11 # Max wheat in a field
 
+# Water Source (Well) Configuration
+WELL_CAPACITY = 1_000_000
+WELL_GENERATION_INTERVAL = 0.1
+INITIAL_WELLS = 1 # The number of wells to spawn at startup
+
 # Resource Display Settings
 RESOURCE_TEXT_COLOR = COLOR_WHITE
 RESOURCE_FONT_SIZE = 16
@@ -57,8 +62,7 @@ RESOURCE_VISUAL_COLORS = {
     ResourceType.BERRY: (220, 20, 60),   # Crimson for BERRY
     ResourceType.WHEAT: (218, 165, 32),  # Goldenrod for WHEAT
     ResourceType.FLOUR_POWDER: (211, 211, 211), # LightGrey for FLOUR_POWDER
-    # Add other resource type colors here as they are defined
-    # Example: ResourceType.WATER: (0, 191, 255) # Deep Sky Blue
+    ResourceType.WATER: (0, 128, 255), # A distinct blue color
 }
 # Task Generation Settings
 MIN_BERRY_STOCK_LEVEL = 50
