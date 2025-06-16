@@ -44,6 +44,15 @@ WELL_CAPACITY = 1_000_000
 WELL_GENERATION_INTERVAL = 0.1
 INITIAL_WELLS = 1 # The number of wells to spawn at startup
 
+# Bakery Configuration
+BAKERY_PROCESSING_SPEED = 180 # Ticks to produce bread
+BAKERY_FLOUR_CAPACITY = 10
+BAKERY_WATER_CAPACITY = 5
+BAKERY_OUTPUT_CAPACITY = 10
+BAKERY_COLOR = (139, 69, 19)  # SaddleBrown
+BAKERY_PROCESSING_COLOR = (184, 115, 51) # A lighter brown
+INITIAL_BAKERIES = 1
+
 # Resource Display Settings
 RESOURCE_TEXT_COLOR = COLOR_WHITE
 RESOURCE_FONT_SIZE = 16
@@ -63,6 +72,7 @@ RESOURCE_VISUAL_COLORS = {
     ResourceType.WHEAT: (218, 165, 32),  # Goldenrod for WHEAT
     ResourceType.FLOUR_POWDER: (211, 211, 211), # LightGrey for FLOUR_POWDER
     ResourceType.WATER: (0, 128, 255), # A distinct blue color
+    ResourceType.BREAD: (210, 180, 140), # Tan for BREAD
 }
 # Task Generation Settings
 MIN_BERRY_STOCK_LEVEL = 50

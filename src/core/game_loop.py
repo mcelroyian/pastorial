@@ -14,6 +14,7 @@ from src.resources.berry_bush import BerryBush
 from src.resources.wheat_field import WheatField # Added WheatField
 from src.resources.water_source import WaterSource
 from src.resources.mill import Mill # Added Mill
+from src.resources.bakery import Bakery
 from src.agents.manager import AgentManager # Added AgentManager
 from src.tasks.task_manager import TaskManager # Added TaskManager
 from src.resources.storage_point import StoragePoint
@@ -210,10 +211,10 @@ class GameLoop:
             entity_grid_width = 1
             entity_grid_height = 1
 
-            if self.grid.is_area_free(gx, gy, entity_grid_width, entity_grid_height):
+            if self.grid.is_area_free(gx, gy, WaterSource.GRID_WIDTH, WaterSource.GRID_HEIGHT):
                 well = WaterSource(grid_position)
                 self.resource_manager.add_node(well)
-                self.grid.update_occupancy(well, gx, gy, entity_grid_width, entity_grid_height, is_placing=True)
+                self.grid.update_occupancy(well, gx, gy, WaterSource.GRID_WIDTH, WaterSource.GRID_HEIGHT, is_placing=True)
                 self.logger.debug(f"Spawned WaterSource (Well) at grid_pos: {grid_position}")
                 spawned_wells += 1
 
@@ -250,6 +251,34 @@ class GameLoop:
             elif spawned_mills_count > 0:
                  self.logger.info(f"Successfully spawned {spawned_mills_count} mills.") # Changed
             # If spawned_mills_count is 0 and available_mill_spots was empty, the initial warning covers it.
+
+        # Spawn Bakeries
+        self.logger.info(f"Attempting to spawn {config.INITIAL_BAKERIES} bakeries...")
+        bakery_width = Bakery.GRID_WIDTH
+        bakery_height = Bakery.GRID_HEIGHT
+        
+        available_bakery_spots = self._find_available_spawn_points(bakery_width, bakery_height)
+        
+        if not available_bakery_spots:
+            self.logger.warning(f"No available space found to spawn any bakeries of size {bakery_width}x{bakery_height}.")
+        else:
+            random.shuffle(available_bakery_spots)
+            
+            spawned_bakeries_count = 0
+            for i in range(min(config.INITIAL_BAKERIES, len(available_bakery_spots))):
+                pos_vec = available_bakery_spots[i]
+                gx, gy = int(pos_vec.x), int(pos_vec.y)
+                
+                bakery = Bakery(pos_vec)
+                self.resource_manager.add_processing_station(bakery)
+                self.grid.update_occupancy(bakery, gx, gy, bakery_width, bakery_height, is_placing=True)
+                self.logger.debug(f"Spawned Bakery (size {bakery_width}x{bakery_height}) at grid_pos: {pos_vec}")
+                spawned_bakeries_count += 1
+
+            if spawned_bakeries_count < config.INITIAL_BAKERIES:
+                self.logger.warning(f"Successfully spawned {spawned_bakeries_count} out of {config.INITIAL_BAKERIES} desired bakeries due to limited available space.")
+            elif spawned_bakeries_count > 0:
+                 self.logger.info(f"Successfully spawned {spawned_bakeries_count} bakeries.")
 
     def _spawn_initial_storage_points(self):
         """Creates and places the initial storage points."""
@@ -293,8 +322,8 @@ class GameLoop:
 
 
         flour_storage_capacity = 30
-        flour_accepted_types = [ResourceType.FLOUR_POWDER]
-
+        flour_accepted_types = [ResourceType.FLOUR_POWDER, ResourceType.BREAD]
+ 
         if self.grid.is_area_free(fsgx, fsgy, entity_grid_width, entity_grid_height): # Still 1x1
             flour_storage_point = StoragePoint(
                 position=flour_storage_position_grid,

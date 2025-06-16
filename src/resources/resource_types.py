@@ -6,4 +6,5 @@ class ResourceType(Enum):
     WHEAT = auto()
     FLOUR_POWDER = auto()
     WATER = auto()
+    BREAD = auto()
     # Future resource types can be added here
