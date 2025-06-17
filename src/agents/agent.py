@@ -469,8 +469,20 @@ class Agent:
             self.logger.debug(f"Is Idle with no intent. Transitioning to EvaluatingIntentBehavior to seek work.")
             self._transition_behavior(EvaluatingIntentBehavior)
 
-    def draw(self, screen: pygame.Surface, grid):
+    def get_rect(self) -> pygame.Rect:
+        """Returns the agent's bounding box as a pygame.Rect."""
+        screen_pos = self.grid.grid_to_screen(self.position)
+        agent_radius = self.grid.cell_width // 2
+        return pygame.Rect(
+            screen_pos.x - agent_radius,
+            screen_pos.y - agent_radius,
+            agent_radius * 2,
+            agent_radius * 2
+        )
+
+    def draw(self, screen: pygame.Surface, grid, selected_agent: Optional['Agent'] = None):
         """Draws the agent on the screen."""
+        is_selected = (self == selected_agent)
         screen_pos = self.grid.grid_to_screen(self.position) # type: ignore
         agent_radius = self.grid.cell_width // 2 # type: ignore
 
@@ -480,6 +492,10 @@ class Agent:
         current_display_color = self.behavior_colors.get(type(self.current_behavior), self.color)
             
         pygame.draw.circle(screen, current_display_color, screen_pos, agent_radius)
+
+        if is_selected:
+            pygame.draw.circle(screen, config.COLOR_WHITE, screen_pos, agent_radius + 2, 2)
+
 
         if self.current_inventory['quantity'] > 0 and self.current_inventory['resource_type'] is not None:
             carried_resource_type = self.current_inventory['resource_type']

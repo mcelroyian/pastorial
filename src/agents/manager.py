@@ -81,8 +81,21 @@ class AgentManager:
         for agent in self.agents:
             agent.update(dt, resource_manager)
 
-    def render_agents(self, screen: pygame.Surface, grid):
+    def render_agents(self, screen: pygame.Surface, grid, selected_agent: Optional[Agent] = None):
         """Renders all managed agents."""
         # Render agents after other elements like the grid, but potentially before UI
         for agent in self.agents:
-            agent.draw(screen, grid)
+            agent.draw(screen, grid, selected_agent)
+
+    def get_agent_at_position(self, grid_pos: pygame.math.Vector2) -> Optional[Agent]:
+        """
+        Finds and returns an agent at the given grid coordinates.
+        Since agents are 1x1, it checks if the agent's integer position matches.
+        """
+        target_gx, target_gy = int(grid_pos.x), int(grid_pos.y)
+        for agent in self.agents:
+            agent_gx, agent_gy = int(agent.position.x), int(agent.position.y)
+            if agent_gx == target_gx and agent_gy == target_gy:
+                self.logger.info(f"Found agent {agent.name} at position {grid_pos}")
+                return agent
+        return None

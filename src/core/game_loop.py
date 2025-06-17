@@ -20,6 +20,7 @@ from src.tasks.task_manager import TaskManager # Added TaskManager
 from src.resources.storage_point import StoragePoint
 from src.resources.resource_types import ResourceType
 from src.rendering.task_status_display import TaskStatusDisplay # Added for Task UI
+from src.agents.agent import Agent # For type hinting
 
 class GameLoop:
     """
@@ -35,6 +36,11 @@ class GameLoop:
         self.dt = 1.0 / config.TARGET_FPS # Timestep duration
         self.show_task_panel = True # Added for toggling task panel visibility
         self.logger = logging.getLogger(__name__) # Added
+
+        # Interactive state attributes
+        self.paused: bool = False
+        self.manual_control_mode: bool = False
+        self.selected_agent: Optional[Agent] = None
  
         # Initialize Grid
         try:
@@ -134,6 +140,17 @@ class GameLoop:
             self.is_running = False
         if user_actions['toggle_panel']:
             self.show_task_panel = not self.show_task_panel
+        if user_actions['toggle_pause']:
+            self.paused = not self.paused
+            self.logger.info(f"Game {'PAUSED' if self.paused else 'UNPAUSED'}")
+        if user_actions['mouse_click']:
+            click_pos_screen = user_actions['mouse_click']
+            click_pos_grid = self.grid.screen_to_grid(pygame.math.Vector2(click_pos_screen))
+            self.selected_agent = self.agent_manager.get_agent_at_position(click_pos_grid)
+            if self.selected_agent:
+                self.logger.info(f"Agent selected: {self.selected_agent.name}")
+            else:
+                self.logger.info("No agent selected at click position.")
 
     def _spawn_entity(self, entity_class, num_to_spawn, **kwargs):
         """
@@ -301,7 +318,7 @@ class GameLoop:
         self.resource_manager.draw_nodes(self.screen, self.resource_font, self.grid) # Pass grid object
 
         # Draw agents
-        self.agent_manager.render_agents(self.screen, self.grid)
+        self.agent_manager.render_agents(self.screen, self.grid, self.selected_agent)
 
         # Draw debug info (FPS)
         # Use clock attribute directly for FPS calculation
@@ -334,7 +351,8 @@ class GameLoop:
 
             # Fixed timestep updates
             while self.accumulator >= self.dt:
-                self.update(self.dt)
+                if not self.paused:
+                    self.update(self.dt)
                 self.accumulator -= self.dt
 
             # Rendering happens based on available time

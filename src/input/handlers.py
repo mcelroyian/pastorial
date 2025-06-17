@@ -5,11 +5,21 @@ def process_events():
     Processes Pygame events.
     Returns a dictionary of actions, e.g., {'quit': False, 'toggle_panel': False}.
     """
-    actions = {'quit': False, 'toggle_panel': False}
+    actions = {
+        'quit': False,
+        'toggle_panel': False,
+        'toggle_pause': False,
+        'mouse_click': None
+    }
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             actions['quit'] = True
-        if event.type == pygame.KEYDOWN:
+        elif event.type == pygame.KEYDOWN:
             if event.key == pygame.K_t:
                 actions['toggle_panel'] = True
+            elif event.key == pygame.K_p:
+                actions['toggle_pause'] = True
+        elif event.type == pygame.MOUSEBUTTONDOWN:
+            actions['mouse_click'] = event.pos
+            
     return actions
