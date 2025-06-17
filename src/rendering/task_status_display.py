@@ -109,14 +109,14 @@ class TaskStatusDisplay:
                 TaskStatus.IN_PROGRESS_MOVE_TO_DROPOFF, TaskStatus.IN_PROGRESS_DELIVERING,
                 TaskStatus.PREPARING
             ]:
-                details_text += f" | {task.get_target_description()}"
+                details_text += f" | {task.get_description()}"
 
         elif task.status in [
             TaskStatus.IN_PROGRESS_MOVE_TO_RESOURCE, TaskStatus.IN_PROGRESS_GATHERING,
             TaskStatus.IN_PROGRESS_MOVE_TO_DROPOFF, TaskStatus.IN_PROGRESS_DELIVERING,
             TaskStatus.PREPARING # General preparing state
         ]: # For other task types that might have a description
-            details_text = task.get_target_description()
+            details_text = task.get_description()
 
         if details_text:
             self._draw_text(surface, details_text, (self.padding + 10, y_pos), self.text_color, self.font)

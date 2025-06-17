@@ -167,6 +167,38 @@ class TaskManager:
             self.logger.info(f"TaskManager: Task {task.task_id} CANCELLED for agent {agent.id}. Added to failed/cancelled list.") # Changed
 
 
+    def cancel_task(self, task: Task, agent: 'Agent'):
+        """
+        Cancels the specified task, instructing the agent to stop and cleaning up the task.
+        """
+        self.logger.info(f"Canceling task {task.task_id} for agent {agent.id}")
+
+        # 1. Instruct the agent to cancel its current actions
+        agent.cancel_current_task()
+
+        # 2. Call the task's cleanup method to release resources
+        task.cleanup(agent, self.resource_manager_ref, success=False)
+
+        # 3. Report the task outcome to move it from assigned to a final state
+        self.report_task_outcome(task, TaskStatus.CANCELLED, agent)
+
+    def force_assign_task(self, task: Task, agent: 'Agent'):
+        """
+        Forcefully assigns a task to an agent, canceling any existing task.
+        """
+        self.logger.info(f"Force assigning task {task.task_id} to agent {agent.id}")
+        
+        # Check if the agent already has a task
+        if agent.id in self.assigned_tasks:
+            existing_task = self.assigned_tasks[agent.id]
+            self.logger.info(f"Agent {agent.id} already has task {existing_task.task_id}. Canceling it.")
+            self.cancel_task(existing_task, agent)
+
+        # Assign the new task
+        self.add_task(task)
+        self.attempt_claim_task(task.task_id, agent)
+
+
     def assign_task_to_agent(self, agent: 'Agent', resource_manager: 'ResourceManager') -> bool:
         """
         Finds a suitable task for the agent, assigns it, and initiates its preparation.
@@ -281,7 +313,7 @@ class TaskManager:
             self.logger.warning(f"TaskManager: Could not find task {task_id} to notify about intent {intent_id} outcome from agent {agent.id}. It might have already completed/failed.")
 
 
-    def update(self, dt: float):
+    def update(self, dt: float, manual_mode: bool = False):
         """
         Periodic update for the TaskManager.
         - Can generate new tasks based on simulation state (e.g., low resources).
@@ -291,7 +323,10 @@ class TaskManager:
         current_time = time.time()
         if current_time >= self._next_task_check_time:
             self.logger.debug(f"TaskManager: Update - time to check for task generation. Current time: {current_time:.2f}, Next check: {self._next_task_check_time:.2f}") # Changed
-            self._generate_tasks_if_needed()
+            if not manual_mode:
+                self._generate_tasks_if_needed()
+            else:
+                self.logger.debug("Skipping autonomous task generation due to manual control mode.")
             self._next_task_check_time = current_time + self._task_generation_interval
         # else:
             # self.logger.debug(f"TaskManager: Update - NOT time to check for task generation. Current time: {current_time:.2f}, Next check: {self._next_task_check_time:.2f}") # Changed

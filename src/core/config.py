@@ -27,7 +27,11 @@ COLOR_BLACK = (0, 0, 0)
 COLOR_WHITE = (255, 255, 255)
 DEBUG_TEXT_COLOR = COLOR_WHITE
 PANEL_BACKGROUND_ALPHA = 128  # Value from 0 (transparent) to 255 (opaque)
- 
+COLOR_GRAY = (30, 30, 30)
+
+# Inspector Panel Settings
+INSPECTOR_PANEL_WIDTH = 300
+
 # Resource Node Settings
 BERRY_BUSH_COLOR = (0, 128, 0)  # Green
 BERRY_BUSH_CAPACITY = 23

@@ -9,7 +9,8 @@ def process_events():
         'quit': False,
         'toggle_panel': False,
         'toggle_pause': False,
-        'mouse_click': None
+        'mouse_click': None,
+        'toggle_manual_mode': False
     }
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -19,6 +20,8 @@ def process_events():
                 actions['toggle_panel'] = True
             elif event.key == pygame.K_p:
                 actions['toggle_pause'] = True
+            elif event.key == pygame.K_m:
+                actions['toggle_manual_mode'] = True
         elif event.type == pygame.MOUSEBUTTONDOWN:
             actions['mouse_click'] = event.pos
             

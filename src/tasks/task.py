@@ -51,10 +51,9 @@ class Task(ABC):
         """
         pass
 
-    @abstractmethod
-    def get_target_description(self) -> str:
+    def get_description(self) -> str:
         """Returns a string description of the current target or goal of the task for debugging/UI."""
-        pass
+        return f"{self.task_type.name} (Status: {self.status.name})"
 
     @abstractmethod
     def on_intent_outcome(self, agent: 'Agent', intent_id: uuid.UUID, intent_status: IntentStatus, resource_manager: 'ResourceManager'):
@@ -236,7 +235,7 @@ class GatherAndDeliverTask(Task):
         # Agent's current_task will be set to None by the Agent class after this.
         # TaskManager will be notified by the Agent class.
 
-    def get_target_description(self) -> str:
+    def get_description(self) -> str:
         if self._current_step_key == "move_to_resource" and self.target_resource_node_ref:
             return f"Moving to resource {self.resource_type_to_gather.name} at {self.target_resource_node_ref.position}"
         elif self._current_step_key == "gather_resource" and self.target_resource_node_ref:
@@ -533,7 +532,7 @@ class DeliverWheatToMillTask(Task):
                  self.target_storage_ref.pickup_reservations.pop(self.task_id, None)
 
 
-    def get_target_description(self) -> str:
+    def get_description(self) -> str:
         if self.status == TaskStatus.PREPARING:
             return f"Preparing to retrieve {self.resource_to_retrieve.name} for Mill"
         if self._current_step_key == "move_to_storage" and self.target_storage_ref:

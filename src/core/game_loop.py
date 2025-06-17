@@ -3,7 +3,7 @@ import asyncio
 import time
 import random
 import logging # Added
-from typing import List, Optional, Any # Added for type hinting
+from typing import List, Optional, Any, Dict # Added for type hinting
 from pygame.math import Vector2 # Added for agent positions
 from src.core import config
 from src.input import handlers as input_handlers
@@ -20,6 +20,7 @@ from src.tasks.task_manager import TaskManager # Added TaskManager
 from src.resources.storage_point import StoragePoint
 from src.resources.resource_types import ResourceType
 from src.rendering.task_status_display import TaskStatusDisplay # Added for Task UI
+from src.rendering.inspector_display import InspectorDisplay
 from src.agents.agent import Agent # For type hinting
 
 class GameLoop:
@@ -110,6 +111,39 @@ class GameLoop:
             config_module=config # Pass the config module
         )
 
+        self.inspector_display = InspectorDisplay(
+            surface=self.screen,
+            font=self.ui_font
+        )
+
+    def _get_agent_display_data(self, agent: Agent) -> Dict[str, Any]:
+        """
+        Gathers and formats agent data for the inspector panel.
+        """
+        agent_data = {
+            'name': agent.name,
+            'id': agent.id,
+            'position': f"({agent.position.x:.1f}, {agent.position.y:.1f})",
+            'inventory': {
+                'type': agent.current_inventory['resource_type'].name if agent.current_inventory['resource_type'] else 'None',
+                'quantity': agent.current_inventory['quantity']
+            },
+            'behavior': agent.current_behavior.__class__.__name__,
+            'intent': agent.current_intent.get_description() if agent.current_intent else 'None',
+            'task': 'None'
+        }
+
+        if agent.current_intent and agent.current_intent.originating_task_id:
+            task = self.task_manager.get_task_by_id(agent.current_intent.originating_task_id)
+            if task:
+                agent_data['task'] = {
+                    'type': task.task_type.name,
+                    'status': task.status.name,
+                    'description': task.get_description()
+                }
+        return agent_data
+
+
     def _spawn_initial_agents(self):
         """Creates and places the initial agents."""
         # Example: Spawn agents at specific grid coordinates
@@ -151,6 +185,9 @@ class GameLoop:
                 self.logger.info(f"Agent selected: {self.selected_agent.name}")
             else:
                 self.logger.info("No agent selected at click position.")
+        if user_actions['toggle_manual_mode']:
+            self.manual_control_mode = not self.manual_control_mode
+            self.logger.info(f"Manual Control Mode {'ACTIVATED' if self.manual_control_mode else 'DEACTIVATED'}")
 
     def _spawn_entity(self, entity_class, num_to_spawn, **kwargs):
         """
@@ -300,7 +337,7 @@ class GameLoop:
         self.resource_manager.update_nodes(dt)
 
         # Update Task Manager (e.g., for task generation, timeouts)
-        self.task_manager.update(dt)
+        self.task_manager.update(dt, self.manual_control_mode)
 
         # Update agents (agents will interact with TaskManager)
         self.agent_manager.update_agents(dt, self.resource_manager)
@@ -327,6 +364,11 @@ class GameLoop:
         # Draw the Task Status Display Panel
         if hasattr(self, 'task_display') and self.show_task_panel: # Ensure it's initialized and toggled on
             self.task_display.draw()
+
+        # Draw the Inspector Panel
+        if self.selected_agent:
+            agent_data = self._get_agent_display_data(self.selected_agent)
+            self.inspector_display.draw(agent_data)
 
         pygame.display.flip() # Update the full display Surface to the screen
 

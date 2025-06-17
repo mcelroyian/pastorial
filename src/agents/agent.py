@@ -480,6 +480,19 @@ class Agent:
             agent_radius * 2
         )
 
+    def v(self):
+        """Forcefully cancels the agent's current task and intent."""
+        self.logger.info(f"Canceling current task and intent.")
+        if self.current_intent:
+            self.current_intent.status = IntentStatus.CANCELLED
+            # The TaskManager will handle notifying the task object.
+        
+        self.current_intent = None
+        self.current_path = None
+        self.target_position = None
+        self.final_destination = None
+        self._transition_behavior(IdleBehavior)
+
     def draw(self, screen: pygame.Surface, grid, selected_agent: Optional['Agent'] = None):
         """Draws the agent on the screen."""
         is_selected = (self == selected_agent)
