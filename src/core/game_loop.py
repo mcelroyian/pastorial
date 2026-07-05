@@ -15,6 +15,7 @@ from src.resources.wheat_field import WheatField # Added WheatField
 from src.resources.water_source import WaterSource
 from src.resources.mill import Mill # Added Mill
 from src.resources.bakery import Bakery
+from src.resources.beehive import Beehive
 from src.agents.manager import AgentManager # Added AgentManager
 from src.tasks.task_manager import TaskManager # Added TaskManager
 from src.resources.storage_point import StoragePoint
@@ -235,6 +236,8 @@ class GameLoop:
         self._spawn_entity(WaterSource, config.INITIAL_WELLS)
         self._spawn_entity(Mill, config.DESIRED_NUM_MILLS)
         self._spawn_entity(Bakery, config.INITIAL_BAKERIES)
+        # Decorative beehive(s)
+        self._spawn_entity(Beehive, getattr(config, 'INITIAL_BEEHIVES', 1))
 
     def _spawn_initial_storage_points(self):
         """Creates and places the initial storage points."""
