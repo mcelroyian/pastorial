@@ -30,6 +30,7 @@ class Simulation:
         if seed is not None:
             random.seed(seed)
 
+        self.sim_time: float = 0.0
         self.logger = logging.getLogger(__name__)
 
         self.grid = Grid()
@@ -42,8 +43,9 @@ class Simulation:
         self._spawn_initial_agents()
 
     def update(self, dt: float, manual_mode: bool = False):
+        self.sim_time += dt
         self.resource_manager.update_nodes(dt)
-        self.task_manager.update(dt, manual_mode)
+        self.task_manager.update(dt, manual_mode, self.sim_time)
         self.agent_manager.update_agents(dt, self.resource_manager)
 
     def _find_available_spawn_points(self, entity_grid_width: int, entity_grid_height: int) -> List[Vector2]:

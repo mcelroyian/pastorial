@@ -30,6 +30,7 @@ class TaskManager:
 
         self._time_since_last_check: float = 0.0
         self._task_generation_interval: float = 5.0
+        self.sim_time: float = 0.0
 
     def add_task(self, task: Task):
         """Adds a pre-created task to the pending list, sorted by priority."""
@@ -114,7 +115,7 @@ class TaskManager:
         """
         self.logger.debug(f"TaskManager: report_task_outcome CALLED by agent {agent.id} for task {task.task_id} (type: {task.task_type.name}) with status {final_status.name}. Current assigned_tasks keys: {list(self.assigned_tasks.keys())}, task.agent_id: {task.agent_id}")
         task.status = final_status # Ensure final status is set on the task object
-        task.last_update_time = time.time()
+        task.last_update_time = time.time()  # wall-clock, logging only
 
         if agent.id in self.assigned_tasks and self.assigned_tasks[agent.id].task_id == task.task_id:
             self.logger.debug(f"TaskManager: Removing task {task.task_id} for agent {agent.id} from assigned_tasks.")
@@ -291,7 +292,8 @@ class TaskManager:
             self.logger.warning(f"TaskManager: Could not find task {task_id} to notify about intent {intent_id} outcome from agent {agent.id}. It might have already completed/failed.")
 
 
-    def update(self, dt: float, manual_mode: bool = False):
+    def update(self, dt: float, manual_mode: bool = False, sim_time: float = 0.0):
+        self.sim_time = sim_time
         self._time_since_last_check += dt
         if self._time_since_last_check >= self._task_generation_interval:
             if not manual_mode:

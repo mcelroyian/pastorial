@@ -88,8 +88,8 @@ class Task(ABC):
         self.status: TaskStatus = TaskStatus.PENDING
         self.priority: int = priority
         self.agent_id: Optional[uuid.UUID] = None
-        self.creation_time: float = time.time()
-        self.last_update_time: float = self.creation_time
+        self.creation_time: float = time.time()  # wall-clock, logging only
+        self.last_update_time: float = self.creation_time  # wall-clock, logging only
         self.error_message: Optional[str] = None
         self.active_intents: List[uuid.UUID] = []
         self.steps: List[TaskStep] = []
@@ -107,7 +107,7 @@ class Task(ABC):
         return f"{self.task_type.name} (Status: {self.status.name})"
 
     def _update_timestamp(self):
-        self.last_update_time = time.time()
+        self.last_update_time = time.time()  # wall-clock, logging only
 
     def _submit_intent_to_agent(self, agent: 'Agent', intent: Intent):
         if hasattr(agent, 'submit_intent') and callable(agent.submit_intent):

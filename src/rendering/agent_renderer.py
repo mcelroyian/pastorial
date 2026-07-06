@@ -32,8 +32,7 @@ def draw_agent(agent: 'Agent', screen: pygame.Surface, grid, selected_agent: Opt
 
     if agent.current_inventory['quantity'] > 0 and agent.current_inventory['resource_type'] is not None:
         carried = agent.current_inventory['resource_type']
-        key = carried.name if hasattr(carried, 'name') else str(carried)
-        resource_color = config.RESOURCE_VISUAL_COLORS.get(key, (128, 128, 128))
+        resource_color = config.RESOURCE_VISUAL_COLORS.get(carried, (128, 128, 128))
         icon_radius = agent_radius // 2
         pygame.draw.circle(
             screen,
@@ -41,3 +40,17 @@ def draw_agent(agent: 'Agent', screen: pygame.Surface, grid, selected_agent: Opt
             (screen_pos[0], screen_pos[1] - agent_radius - icon_radius // 2),
             icon_radius,
         )
+
+    # Hunger bar — thin rect below the agent circle
+    if hasattr(agent, 'needs'):
+        bar_w = agent_radius * 2
+        bar_h = 3
+        bar_x = screen_pos[0] - agent_radius
+        bar_y = screen_pos[1] + agent_radius + 2
+        # background
+        pygame.draw.rect(screen, (60, 60, 60), (bar_x, bar_y, bar_w, bar_h))
+        # fill: green → red as hunger drops
+        hunger = agent.needs.hunger
+        fill_color = (int(255 * (1 - hunger)), int(255 * hunger), 0)
+        fill_w = max(1, int(bar_w * hunger))
+        pygame.draw.rect(screen, fill_color, (bar_x, bar_y, fill_w, bar_h))

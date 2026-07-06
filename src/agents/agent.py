@@ -7,10 +7,11 @@ from typing import List, Dict, Optional, TYPE_CHECKING
 from ..resources.resource_types import ResourceType
 from ..core import config
 from ..tasks.task import GatherAndDeliverTask, DeliverWheatToMillTask
-from ..tasks.task_types import TaskStatus
+from ..tasks.task_types import TaskStatus, TaskType
 from ..pathfinding.astar import find_path
 from .intents import Intent, IntentStatus, MoveIntent, InteractAtTargetIntent, RandomMoveIntent
 from .agent_behaviors import AgentBehavior, IdleBehavior, MovingBehavior, InteractingBehavior, PathFailedBehavior, EvaluatingIntentBehavior
+from .needs import Needs
 
 if TYPE_CHECKING:
     from ..tasks.task import Task
@@ -71,6 +72,8 @@ class Agent:
         }
 
         self.resource_priorities: Optional[List[ResourceType]] = resource_priorities
+
+        self.needs: Needs = Needs()
 
         # Initialize the first behavior after all attributes are set
         self.current_behavior.enter()
@@ -229,7 +232,7 @@ class Agent:
             return True
 
         if distance_to_waypoint > 0:
-            potential_movement = direction.normalize() * self.speed * dt
+            potential_movement = direction.normalize() * self.speed * self.needs.speed_multiplier * dt
             if potential_movement.length() >= distance_to_waypoint:
                 self.logger.debug(f"Reached waypoint {self.target_position} by moving.")
                 self.position = pygame.math.Vector2(self.target_position)
@@ -247,6 +250,9 @@ class Agent:
 
     def update(self, dt: float, resource_manager: 'ResourceManager'):
         """Updates the agent's behavior based on its current intent."""
+        self.needs.update(dt)
+        self._check_critical_hunger(resource_manager)
+
         if not self.current_behavior:
             self.logger.error(f"Has no current_behavior. Defaulting to IdleBehavior.")
             self._transition_behavior(IdleBehavior)
@@ -305,6 +311,22 @@ class Agent:
             self._transition_behavior(EvaluatingIntentBehavior)
         elif not self.current_intent and isinstance(self.current_behavior, IdleBehavior):
             self._transition_behavior(EvaluatingIntentBehavior)
+
+    def _check_critical_hunger(self, resource_manager: 'ResourceManager') -> None:
+        """Abandon the current non-EAT task if hunger is critical so the agent seeks food."""
+        if self.needs.hunger >= config.HUNGER_CRITICAL_THRESHOLD:
+            return
+        current_task = self.task_manager_ref.assigned_tasks.get(self.id)
+        if current_task is None or current_task.task_type == TaskType.EAT:
+            return
+        self.logger.warning(f"Critical hunger ({self.needs.hunger:.2f}). Abandoning {current_task.task_type.name}.")
+        current_task.cleanup(self, resource_manager, success=False)
+        self.task_manager_ref.report_task_outcome(current_task, TaskStatus.FAILED, self)
+        self.current_intent = None
+        self.current_path = None
+        self.target_position = None
+        self.final_destination = None
+        self._transition_behavior(EvaluatingIntentBehavior)
 
     def cancel_current_task(self):
         """Forcefully cancels the agent's current task and intent."""
