@@ -78,7 +78,7 @@ class AgentManager:
         self.logger.info(f"Created agent {agent_name} ({agent_id}) at {position}")
         return new_agent
 
-    def update_agents(self, dt: float, resource_manager) -> None:
+    def update_agents(self, dt: float, resource_manager, metrics=None) -> None:
         """Updates all agents; removes those that have starved to death."""
         dead = []
         for agent in self.agents:
@@ -86,10 +86,12 @@ class AgentManager:
             if agent.needs.is_dead:
                 dead.append(agent)
         for agent in dead:
-            self._remove_dead_agent(agent, resource_manager)
+            self._remove_dead_agent(agent, resource_manager, metrics)
 
-    def _remove_dead_agent(self, agent, resource_manager) -> None:
+    def _remove_dead_agent(self, agent, resource_manager, metrics=None) -> None:
         self.logger.warning(f"Agent {agent.name} ({agent.id}) starved to death.")
+        if metrics is not None:
+            metrics.record("agent_death", agent_name=agent.name)
 
         # Release current task claims and re-post to job board
         current_task = self.task_manager_ref.assigned_tasks.get(agent.id)

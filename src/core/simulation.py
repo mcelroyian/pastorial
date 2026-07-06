@@ -18,6 +18,7 @@ from src.resources.storage_point import StoragePoint
 from src.resources.resource_types import ResourceType
 from src.agents.manager import AgentManager
 from src.tasks.task_manager import TaskManager
+from src.core.metrics import SimMetrics
 
 
 class Simulation:
@@ -31,6 +32,7 @@ class Simulation:
             random.seed(seed)
 
         self.sim_time: float = 0.0
+        self.metrics: SimMetrics = SimMetrics()
         self.logger = logging.getLogger(__name__)
 
         self.grid = Grid()
@@ -39,6 +41,7 @@ class Simulation:
         self._spawn_initial_storage_points()
 
         self.task_manager = TaskManager(resource_manager=self.resource_manager)
+        self.task_manager.metrics = self.metrics
         self.agent_manager = AgentManager(grid=self.grid, task_manager=self.task_manager)
         self._spawn_initial_agents()
 
@@ -46,7 +49,8 @@ class Simulation:
         self.sim_time += dt
         self.resource_manager.update_nodes(dt)
         self.task_manager.update(dt, manual_mode, self.sim_time)
-        self.agent_manager.update_agents(dt, self.resource_manager)
+        self.agent_manager.update_agents(dt, self.resource_manager, self.metrics)
+        self.metrics.update(self.sim_time, self.resource_manager, self.agent_manager)
 
     def _find_available_spawn_points(self, entity_grid_width: int, entity_grid_height: int) -> List[Vector2]:
         available: List[Vector2] = []

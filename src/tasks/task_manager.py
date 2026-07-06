@@ -26,6 +26,7 @@ class TaskManager:
         self.failed_tasks: List[Task] = []
 
         self.resource_manager_ref: 'ResourceManager' = resource_manager
+        self.metrics = None  # set by Simulation after construction
         self.logger = logging.getLogger(__name__)
 
         self._time_since_last_check: float = 0.0
@@ -126,9 +127,20 @@ class TaskManager:
         if final_status == TaskStatus.COMPLETED:
             self.completed_tasks.append(task)
             self.logger.info(f"TaskManager: Task {task.task_id} COMPLETED by agent {agent.id}. Completed: {len(self.completed_tasks)}")
+            if self.metrics is not None:
+                self.metrics.record("task_completed", task_type=task.task_type.name)
+                if isinstance(task, EatTask):
+                    from ..resources.resource_types import ResourceType
+                    self.metrics.record("consumed", resource_type=ResourceType.BREAD, quantity=1)
+                elif isinstance(task, GatherAndDeliverTask) and task.quantity_delivered > 0:
+                    self.metrics.record("gathered",
+                                        resource_type=task.resource_type_to_gather,
+                                        quantity=task.quantity_delivered)
         elif final_status == TaskStatus.FAILED:
             self.failed_tasks.append(task)
             self.logger.warning(f"TaskManager: Task {task.task_id} FAILED for agent {agent.id}. Reason: {task.error_message}.")
+            if self.metrics is not None:
+                self.metrics.record("task_failed", task_type=task.task_type.name)
 
             # Personal-need tasks (EAT) are never re-posted to the shared job board.
             if not isinstance(task, EatTask):
