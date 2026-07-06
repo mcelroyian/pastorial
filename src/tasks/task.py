@@ -562,3 +562,93 @@ class PatrolTask(Task):
         pts = [self.point_a, self.point_b]
         idx = min(self.current_step_index, len(pts) - 1)
         return f"Patrol → {pts[idx]}"
+
+
+# ---------------------------------------------------------------------------
+# EatTask — self-generated personal task, never posted to the job board
+# ---------------------------------------------------------------------------
+
+class EatTask(Task):
+    """Agent moves to a bread storage point and eats, restoring hunger."""
+
+    def __init__(self, priority: int):
+        super().__init__(TaskType.EAT, priority)
+        self.target_storage_ref = None
+        self._reserved_quantity: int = 0
+
+    def prepare(self, agent: 'Agent', resource_manager: 'ResourceManager') -> bool:
+        self._update_timestamp()
+        self.status = TaskStatus.PREPARING
+
+        candidates = sorted(
+            [sp for sp in resource_manager.storage_points
+             if sp.has_resource(ResourceType.BREAD, 1)],
+            key=lambda sp: (sp.position - agent.position).length_squared(),
+        )
+        for sp in candidates:
+            reserved = sp.reserve_for_pickup(self.task_id, ResourceType.BREAD, 1)
+            if reserved > 0:
+                self.target_storage_ref = sp
+                self._reserved_quantity = reserved
+                break
+
+        if not self.target_storage_ref:
+            self.error_message = "No bread available"
+            self.status = TaskStatus.FAILED
+            return False
+
+        if not agent.grid.find_walkable_adjacent_tile(self.target_storage_ref.position):
+            self.target_storage_ref.release_pickup_reservation(self.task_id)
+            self._reserved_quantity = 0
+            self.error_message = "No walkable tile adjacent to bread storage"
+            self.status = TaskStatus.FAILED
+            return False
+
+        storage = self.target_storage_ref
+        grid = agent.grid
+        collection_time = getattr(
+            agent.config, 'DEFAULT_COLLECTION_TIME_FROM_STORAGE',
+            agent.config.DEFAULT_GATHERING_TIME,
+        )
+
+        self.steps = [
+            MoveToStep(lambda: grid.find_walkable_adjacent_tile(storage.position)),
+            InteractStep(
+                lambda: storage.id,
+                "EAT_BREAD",
+                lambda a, t: collection_time,
+                self._on_eat_complete,
+            ),
+        ]
+        self.current_step_index = 0
+        self.status = TaskStatus.IN_PROGRESS
+        self._submit_next_step(agent, resource_manager)
+        return self.status != TaskStatus.FAILED
+
+    def _on_eat_complete(self, agent, task, resource_manager):
+        collected = self.target_storage_ref.collect_reserved_pickup(
+            self.task_id, ResourceType.BREAD, 1
+        )
+        if collected > 0:
+            self._reserved_quantity = 0
+            agent.needs.hunger = min(1.0, agent.needs.hunger + agent.config.HUNGER_RESTORED_PER_BREAD)
+            agent.logger.info(f"Ate bread. Hunger restored to {agent.needs.hunger:.2f}")
+        else:
+            self.status = TaskStatus.FAILED
+            self.error_message = "Failed to collect bread at storage"
+
+    def cleanup(self, agent: 'Agent', resource_manager: 'ResourceManager', success: bool):
+        self._update_timestamp()
+        if self.target_storage_ref and self._reserved_quantity > 0:
+            self.target_storage_ref.release_pickup_reservation(
+                self.task_id, ResourceType.BREAD, self._reserved_quantity
+            )
+            self._reserved_quantity = 0
+
+    def get_description(self) -> str:
+        storage = self.target_storage_ref
+        if self.current_step_index == 0 and storage:
+            return f"Moving to bread at {storage.position}"
+        if self.current_step_index == 1 and storage:
+            return f"Eating bread at {storage.position}"
+        return f"Eat ({self.status.name})"

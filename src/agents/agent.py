@@ -6,7 +6,7 @@ from typing import List, Dict, Optional, TYPE_CHECKING
 
 from ..resources.resource_types import ResourceType
 from ..core import config
-from ..tasks.task import GatherAndDeliverTask, DeliverWheatToMillTask
+from ..tasks.task import GatherAndDeliverTask, DeliverWheatToMillTask, EatTask
 from ..tasks.task_types import TaskStatus, TaskType
 from ..pathfinding.astar import find_path
 from .intents import Intent, IntentStatus, MoveIntent, InteractAtTargetIntent, RandomMoveIntent
@@ -138,36 +138,40 @@ class Agent:
     def acquire_task_or_perform_idle_action(self, dt: float, resource_manager: 'ResourceManager'):
         """
         Called by EvaluatingIntentBehavior when no current_intent exists.
-        Attempts to acquire a new task. If no task is found, may perform an idle action (e.g., random move).
+        Hungry agents self-generate an EatTask before pulling from the job board.
         """
         self.logger.debug(f"Attempting to acquire task or perform idle action.")
 
-        # Attempt to get a task assigned by the TaskManager.
-        # The TaskManager's assign_task_to_agent method will handle:
-        # - Finding a suitable task
-        # - Claiming it for the agent
-        # - Calling task.prepare(), which should submit the first intent.
+        # Personal need: hunger. Self-generate EatTask — never posted to the shared board.
+        if (self.needs.hunger < config.HUNGER_SEEK_FOOD_THRESHOLD
+                and self.needs.eat_retry_timer <= 0.0):
+            eat_task = EatTask(priority=100)
+            eat_task.agent_id = self.id
+            if eat_task.prepare(self, resource_manager):
+                eat_task.status = TaskStatus.ASSIGNED
+                self.task_manager_ref.assigned_tasks[self.id] = eat_task
+                self.logger.info(f"Self-generated EatTask (hunger={self.needs.hunger:.2f}).")
+                if self.current_intent and self.current_intent.status == IntentStatus.PENDING:
+                    self._process_current_intent()
+                return
+            else:
+                # No bread right now — retry after cooldown, continue normal work
+                self.needs.eat_retry_timer = config.EAT_RETRY_COOLDOWN
+                self.logger.info(f"EatTask.prepare failed (no bread). Retry in {config.EAT_RETRY_COOLDOWN}s.")
+
+        # Normal job-board path
         task_assigned_and_prepared = self.task_manager_ref.assign_task_to_agent(self, resource_manager)
 
         if task_assigned_and_prepared:
-            self.logger.info(f"TaskManager assigned and prepared a task. Current intent should be set by task.prepare().")
-            # If assign_task_to_agent was successful, self.current_intent should have been set
-            # by the task's prepare() method calling self.submit_intent().
-            # EvaluatingIntentBehavior will pick this up in the next cycle or if _process_current_intent is called.
+            self.logger.info(f"TaskManager assigned and prepared a task.")
             if self.current_intent and self.current_intent.status == IntentStatus.PENDING:
-                self._process_current_intent() # Process it immediately if PENDING
+                self._process_current_intent()
             elif not self.current_intent:
-                self.logger.warning(f"TaskManager.assign_task_to_agent reported success, but no current_intent was set by task.prepare(). This is unexpected.")
-                # Fallback to random move if intent wasn't set for some reason
-                self.logger.info(f"Submitting RandomMoveIntent as a fallback after failed task intent submission.")
-                random_move = RandomMoveIntent()
-                self.submit_intent(random_move)
+                self.logger.warning(f"assign_task_to_agent reported success but no intent was set.")
+                self.submit_intent(RandomMoveIntent())
         else:
-            # No task was assigned or task preparation failed.
-            # Perform idle action: submit a RandomMoveIntent.
-            self.logger.info(f"No task assigned or task preparation failed. Submitting RandomMoveIntent.")
-            random_move = RandomMoveIntent()
-            self.submit_intent(random_move)
+            self.logger.info(f"No task assigned. Submitting RandomMoveIntent.")
+            self.submit_intent(RandomMoveIntent())
 
     def set_target(self, final_destination: pygame.math.Vector2):
         """

@@ -3,7 +3,7 @@ import time
 import logging
 from typing import List, Dict, Optional, TYPE_CHECKING
 
-from .task import Task, GatherAndDeliverTask, DeliverWheatToMillTask
+from .task import Task, GatherAndDeliverTask, DeliverWheatToMillTask, EatTask
 from .task_types import TaskType, TaskStatus
 from ..resources.resource_types import ResourceType # Assuming this path
 from ..resources.mill import Mill # For checking Mill instances
@@ -127,16 +127,15 @@ class TaskManager:
             self.completed_tasks.append(task)
             self.logger.info(f"TaskManager: Task {task.task_id} COMPLETED by agent {agent.id}. Completed: {len(self.completed_tasks)}")
         elif final_status == TaskStatus.FAILED:
-            self.failed_tasks.append(task) # Keep a record of failed tasks
-            self.logger.warning(f"TaskManager: Task {task.task_id} FAILED for agent {agent.id}. Reason: {task.error_message}. Failed list size: {len(self.failed_tasks)}")
-            
-            # Re-post task to job board (simple re-posting for now)
-            # TODO: Add more sophisticated logic for re-posting (e.g., delay, modification, max retries)
-            self.logger.info(f"TaskManager: Re-posting task {task.task_id} ({task.task_type.name}) to job board due to FAILED status.")
-            task.status = TaskStatus.PENDING # Reset status
-            task.agent_id = None # Unassign agent
-            # task.error_message = None # Optionally clear error message or append to a list of errors
-            self.add_task(task) # add_task handles sorting by priority
+            self.failed_tasks.append(task)
+            self.logger.warning(f"TaskManager: Task {task.task_id} FAILED for agent {agent.id}. Reason: {task.error_message}.")
+
+            # Personal-need tasks (EAT) are never re-posted to the shared job board.
+            if not isinstance(task, EatTask):
+                self.logger.info(f"TaskManager: Re-posting task {task.task_id} ({task.task_type.name}) to job board.")
+                task.status = TaskStatus.PENDING
+                task.agent_id = None
+                self.add_task(task)
 
         elif final_status == TaskStatus.CANCELLED:
             # If cancelled, it might just be removed or put in a separate list

@@ -6,6 +6,7 @@ class TaskType(Enum):
     PROCESS_RESOURCE = auto()
     COLLECT_PROCESSED_AND_DELIVER = auto()
     PATROL = auto()
+    EAT = auto()
 
 class TaskStatus(Enum):
     """Defines the possible states of a task."""
