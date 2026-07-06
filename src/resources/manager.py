@@ -74,17 +74,39 @@ class ResourceManager:
         return [node for node in self.nodes if hasattr(node, 'resource_type') and node.resource_type == resource_type]
 
     def update_nodes(self, dt: float):
-        """
-        Updates all managed resource nodes and processing stations.
-
-        Args:
-            dt: The time elapsed since the last update in seconds (for ResourceNodes).
-        """
         for node in self.nodes:
             node.update(dt)
-        
         for station in self.processing_stations:
-            station.tick() # Processing stations are updated per tick
+            station.tick()
+        self._auto_distribute_outputs()
+
+    def _auto_distribute_outputs(self):
+        """Route single-output station buffers into accepting multi-input stations.
+
+        Mill output had no agent-task delivery path to the bakery; this bridges that gap.
+        Each tick, available flour is pushed directly into bakery input buffers so the
+        production chain (wheat→flour→bread) can complete.
+        """
+        from .processing import MultiInputProcessingStation
+        for source in self.processing_stations:
+            if isinstance(source, MultiInputProcessingStation):
+                continue
+            if source.current_output_quantity < 1.0:
+                continue
+            output_type = source.produced_output_type
+            for sink in self.processing_stations:
+                if sink is source or not isinstance(sink, MultiInputProcessingStation):
+                    continue
+                if output_type not in sink.recipe.inputs:
+                    continue
+                space = sink.input_capacity - sink.current_input_quantity.get(output_type, 0.0)
+                transfer = min(source.current_output_quantity, max(0.0, space))
+                if transfer >= 1.0:
+                    source.current_output_quantity -= transfer
+                    sink.current_input_quantity[output_type] = (
+                        sink.current_input_quantity.get(output_type, 0.0) + transfer
+                    )
+                break
 
     def draw_nodes(self, surface: pygame.Surface, font: pygame.font.Font, grid): # Add grid parameter
         """
