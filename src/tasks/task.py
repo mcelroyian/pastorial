@@ -329,7 +329,9 @@ class GatherAndDeliverTask(Task):
             self.target_resource_node_ref.release(agent.id, self.task_id)
             self.reserved_at_node = False
         if self.target_dropoff_ref and self.reserved_at_dropoff_quantity > 0:
-            self.target_dropoff_ref.release_reservation(self.task_id, self.reserved_at_dropoff_quantity)
+            # Processing stations don't have a reservation system — only storage points do
+            if hasattr(self.target_dropoff_ref, 'release_reservation'):
+                self.target_dropoff_ref.release_reservation(self.task_id, self.reserved_at_dropoff_quantity)
             self.reserved_at_dropoff_quantity = 0
 
     def get_description(self) -> str:

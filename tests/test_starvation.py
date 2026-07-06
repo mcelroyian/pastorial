@@ -22,6 +22,9 @@ def test_starving_agent_dies_and_sim_continues():
     sim = Simulation(seed=42)
     # Block all bread production by removing bakeries
     sim.resource_manager.processing_stations.clear()
+    # Clear pre-seeded bread so agent truly has no food
+    for sp in sim.resource_manager.storage_points:
+        sp.stored_resources.pop(ResourceType.BREAD, None)
 
     agent = sim.agent_manager.agents[0]
     agent.needs.hunger = 0.0  # instant starvation counter

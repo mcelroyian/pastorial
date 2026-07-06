@@ -98,14 +98,17 @@ MAX_ACTIVE_PROCESS_WHEAT_TASKS = 2 # Max concurrent tasks to take wheat to mill
 
 # Agent Action Timings (continued)
 DEFAULT_COLLECTION_TIME_FROM_STORAGE = 1.5 # Seconds to collect from a storage point
-DEFAULT_STORAGE_CAPACITY = 50
+DEFAULT_STORAGE_CAPACITY = 100
+INITIAL_BAKERY_FLOUR = 4   # pre-stocked flour so bakery can start producing immediately
+INITIAL_BAKERY_WATER = 2   # pre-stocked water so bakery can start producing immediately
 # Hunger / Needs Settings
-HUNGER_DECAY_PER_SECOND = 0.005        # full → starving in ~200 sim-seconds
+HUNGER_DECAY_PER_SECOND = 0.002        # full → starving in ~500 sim-seconds (~8 min)
 HUNGER_SEEK_FOOD_THRESHOLD = 0.4       # agent starts self-generating EatTask
 HUNGER_CRITICAL_THRESHOLD = 0.15       # agent drops current task to eat
-HUNGER_RESTORED_PER_BREAD = 0.5        # hunger restored by eating one bread
-STARVATION_GRACE_PERIOD = 30.0         # sim-seconds at hunger==0 before death
+HUNGER_RESTORED_PER_BREAD = 0.6        # hunger restored by eating one bread
+STARVATION_GRACE_PERIOD = 60.0         # sim-seconds at hunger==0 before death
 EAT_RETRY_COOLDOWN = 5.0               # sim-seconds before retrying when no bread
+INITIAL_BREAD_STOCK = 24               # pre-seeded bread in storage at startup (4 per agent)
 
 # Pathfinding Failure Recovery Settings
 PATHFINDING_MAX_RETRIES = 3  # Max number of times to retry a failed path

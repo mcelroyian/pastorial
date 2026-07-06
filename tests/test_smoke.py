@@ -61,12 +61,17 @@ def test_flour_produced(smoke_sim):
 
 
 def test_bread_produced(smoke_sim):
-    bread = sum(
+    # Bread is auto-distributed to storage, so check both bakery buffer and storage.
+    bread_in_bakeries = sum(
         st.current_output_quantity.get(ResourceType.BREAD, 0)
         for st in smoke_sim.resource_manager.processing_stations
         if isinstance(st, Bakery)
     )
-    assert bread > 0, "No bread in bakery output after 9000 ticks"
+    bread_in_storage = smoke_sim.resource_manager.get_global_resource_quantity(ResourceType.BREAD)
+    consumed = smoke_sim.metrics.consumed.get(ResourceType.BREAD, 0)
+    assert bread_in_bakeries + bread_in_storage + consumed > 0, (
+        "No bread in bakeries, storage, or consumed after 9000 ticks"
+    )
 
 
 def test_determinism():

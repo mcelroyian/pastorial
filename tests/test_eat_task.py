@@ -41,8 +41,6 @@ def test_hungry_agent_eats_bread_and_restores_hunger():
     agent = sim.agent_manager.agents[0]
     agent.needs.hunger = config.HUNGER_SEEK_FOOD_THRESHOLD - 0.05
 
-    bread_before = sim.resource_manager.get_global_resource_quantity(ResourceType.BREAD)
-
     for _ in range(_MAX_TICKS):
         sim.update(_DT)
         # Stop early if hunger was restored
@@ -52,8 +50,8 @@ def test_hungry_agent_eats_bread_and_restores_hunger():
     assert agent.needs.hunger > config.HUNGER_SEEK_FOOD_THRESHOLD, (
         f"Agent did not eat; hunger={agent.needs.hunger:.3f}"
     )
-    bread_after = sim.resource_manager.get_global_resource_quantity(ResourceType.BREAD)
-    assert bread_after < bread_before, "Bread count should have decreased"
+    # Bakery production may replenish stock, so use metrics to confirm consumption
+    assert sim.metrics.consumed.get(ResourceType.BREAD, 0) > 0, "Bread should have been consumed"
 
 
 def test_hungry_agent_no_bread_does_not_deadlock():

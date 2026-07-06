@@ -96,6 +96,14 @@ class Simulation:
         self._spawn_entity(Bakery, config.INITIAL_BAKERIES)
         self._spawn_entity(Beehive, getattr(config, 'INITIAL_BEEHIVES', 1))
 
+        # Pre-stock bakeries so bread production begins immediately
+        from src.resources.bakery import Bakery as BakeryClass
+        from src.resources.processing import MultiInputProcessingStation
+        for station in self.resource_manager.processing_stations:
+            if isinstance(station, BakeryClass):
+                station.current_input_quantity[ResourceType.FLOUR_POWDER] = config.INITIAL_BAKERY_FLOUR
+                station.current_input_quantity[ResourceType.WATER] = config.INITIAL_BAKERY_WATER
+
     def _spawn_initial_storage_points(self):
         mid = pygame.math.Vector2(config.SCREEN_WIDTH / 2, config.SCREEN_HEIGHT / 2)
         sg = self.grid.screen_to_grid(mid)
@@ -112,18 +120,30 @@ class Simulation:
         else:
             self.logger.warning(f"Could not spawn BERRY/WHEAT StoragePoint at ({sgx},{sgy}).")
 
-        fx = max(0, min(int(self.grid.width_in_cells / 2 + 5), self.grid.width_in_cells - 1))
-        fy = max(0, min(int(self.grid.height_in_cells / 2), self.grid.height_in_cells - 1))
-        if self.grid.is_area_free(fx, fy, 1, 1):
-            fsp = StoragePoint(
-                position=Vector2(fx, fy),
-                overall_capacity=30,
-                accepted_resource_types=[ResourceType.FLOUR_POWDER, ResourceType.BREAD]
-            )
-            self.resource_manager.add_storage_point(fsp)
-            self.grid.update_occupancy(fsp, fx, fy, 1, 1, is_placing=True)
-        else:
-            self.logger.warning(f"Could not spawn FLOUR StoragePoint at ({fx},{fy}).")
+        # Find a free cell for the flour/bread storage (try a few candidates)
+        bread_sp_candidates = [
+            (int(self.grid.width_in_cells / 2 + 5), int(self.grid.height_in_cells / 2)),
+            (int(self.grid.width_in_cells / 2 + 6), int(self.grid.height_in_cells / 2)),
+            (int(self.grid.width_in_cells / 2 + 7), int(self.grid.height_in_cells / 2)),
+            (int(self.grid.width_in_cells / 2), int(self.grid.height_in_cells / 2 + 3)),
+        ]
+        placed_bread_sp = False
+        for fx, fy in bread_sp_candidates:
+            fx = max(0, min(fx, self.grid.width_in_cells - 1))
+            fy = max(0, min(fy, self.grid.height_in_cells - 1))
+            if self.grid.is_area_free(fx, fy, 1, 1):
+                fsp = StoragePoint(
+                    position=Vector2(fx, fy),
+                    overall_capacity=50,
+                    accepted_resource_types=[ResourceType.FLOUR_POWDER, ResourceType.BREAD]
+                )
+                fsp.stored_resources[ResourceType.BREAD] = config.INITIAL_BREAD_STOCK
+                self.resource_manager.add_storage_point(fsp)
+                self.grid.update_occupancy(fsp, fx, fy, 1, 1, is_placing=True)
+                placed_bread_sp = True
+                break
+        if not placed_bread_sp:
+            self.logger.warning("Could not spawn FLOUR/BREAD StoragePoint — no free candidate cells.")
 
     def _spawn_initial_agents(self):
         for _ in range(config.INITIAL_AGENTS):

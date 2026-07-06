@@ -81,13 +81,16 @@ class ResourceManager:
         self._auto_distribute_outputs()
 
     def _auto_distribute_outputs(self):
-        """Route single-output station buffers into accepting multi-input stations.
+        """Route processing station output buffers to downstream sinks each tick.
 
-        Mill output had no agent-task delivery path to the bakery; this bridges that gap.
-        Each tick, available flour is pushed directly into bakery input buffers so the
-        production chain (wheat→flour→bread) can complete.
+        - Single-output stations (Mill) → multi-input stations (Bakery) that accept that type.
+        - Multi-input stations (Bakery) → storage points that accept each output type.
+
+        This replaces the missing CollectProcessedAndDeliverTask for flour and bread.
         """
         from .processing import MultiInputProcessingStation
+
+        # Mill → Bakery (single-output → multi-input)
         for source in self.processing_stations:
             if isinstance(source, MultiInputProcessingStation):
                 continue
@@ -107,6 +110,23 @@ class ResourceManager:
                         sink.current_input_quantity.get(output_type, 0.0) + transfer
                     )
                 break
+
+        # Bakery → storage points (multi-output → storage)
+        for source in self.processing_stations:
+            if not isinstance(source, MultiInputProcessingStation):
+                continue
+            for output_type, qty in source.current_output_quantity.items():
+                if qty < 1.0:
+                    continue
+                for sp in self.storage_points:
+                    if sp.accepted_resource_types and output_type not in sp.accepted_resource_types:
+                        continue
+                    space = sp.overall_capacity - sp.get_current_load() - sp.get_total_reserved_quantity()
+                    transfer = int(min(qty, max(0, space)))
+                    if transfer >= 1:
+                        source.current_output_quantity[output_type] -= transfer
+                        sp.stored_resources[output_type] = sp.stored_resources.get(output_type, 0) + transfer
+                    break
 
     def draw_nodes(self, surface: pygame.Surface, font: pygame.font.Font, grid): # Add grid parameter
         """
