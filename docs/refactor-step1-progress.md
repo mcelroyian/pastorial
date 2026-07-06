@@ -15,7 +15,7 @@
 |------|-------------|--------|
 | Bug fix | Mill flour output had no delivery path; never reached bakery | ✅ Done (`6a4ab77`) |
 | Task 1 | Headless Simulation class; decouple sim from rendering | ✅ Done (`87ce5f1`) |
-| Task 2 | pytest harness + smoke tests | 🔴 **Next up** — in progress at session end |
+| Task 2 | pytest harness + smoke tests | ✅ Done (commit pending) |
 | Task 3 | Declarative task steps (TaskStep abstraction) | ⬜ Not started |
 | Task 4 | Dead code & comment residue removal | ⬜ Not started |
 | Task 5 | Fix TaskManager/AgentManager init wiring | ✅ Done (folded into Task 1 commit) |
@@ -52,6 +52,37 @@ pushes single-output station buffers directly into the nearest accepting
 python -c "from src.core.simulation import Simulation; s = Simulation(seed=42); [s.update(1/60) for _ in range(600)]"
 ```
 
+### Task 2 (commit pending)
+- **Created `pytest.ini`** — sets `pythonpath = .`, `testpaths = tests`. No other config
+  needed; `src` is a PEP 420 namespace package, works without `__init__.py`.
+- **`tests/test_smoke.py`** — 6 tests sharing a module-scoped fixture (9,000-tick run
+  executed once). Asserts: no exception; berries in storage > 0; wheat reached mill
+  (not checked in storage — wheat is fully hauled to mill by tick 9,000); flour + bread
+  evidence > 0; bread in bakery output > 0; determinism (sequential runs, same seed).
+  Teeth verified: commenting out `station.tick()` → flour and bread tests fail.
+- **`tests/test_pathfinding.py`** — 5 tests: straight path, route around vertical wall
+  obstacle, fully blocked (isolated start corner) returns None, blocked goal returns
+  None, start == goal returns single-element path.
+- **`tests/test_storage_point.py`** — 9 tests: add within/at capacity; rejected type;
+  `reserve_space` / `release_reservation` / `commit_reservation_to_storage` cycle;
+  `reserve_for_pickup` / `collect_reserved_pickup` / `release_pickup_reservation`.
+- **`tests/test_task_lifecycle.py`** — 3 tests using `Simulation(seed=42)`: task starts
+  PENDING; `GatherAndDeliverTask` (priority=100, 3 berries) completes within 3,000 ticks;
+  completed task appears in `task_manager.completed_tasks`.
+
+**Non-obvious gotchas discovered:**
+- `get_global_resource_quantity(WHEAT)` returns 0 at tick 9,000 because wheat is fully
+  hauled from storage to mill by then. Wheat check uses mill input buffer + bread evidence.
+- Determinism test must run sims **sequentially** (not interleaved tick-by-tick), because
+  `random` is module-global; interleaving two sims' `update()` calls corrupts both
+  sequences. Sequential runs from same seed → identical counts confirmed.
+- TaskManager public API for posting is `add_task()`, not `post_task()`.
+
+**Run:**
+```
+.venv/bin/pytest tests/ -v   # 23 tests, ~1.6s
+```
+
 ### Task 5 (folded into Task 1)
 The `TaskManager(resource_manager, agent_manager=None)` + post-init patch was removed.
 `TaskManager.__init__` now only takes `resource_manager`. `agent_manager_ref` is gone.
@@ -60,47 +91,7 @@ The `TaskManager(resource_manager, agent_manager=None)` + post-init patch was re
 
 ## What Comes Next
 
-### Task 2 — Test harness (START HERE next session)
-
-`pytest` is installed in `.venv` (`uv pip install pytest` already run).
-The `tests/` directory and `tests/__init__.py` exist but no test files yet.
-
-Write these four files per the plan:
-
-**`tests/test_smoke.py`**
-- Build `Simulation(seed=42)`, run **9,000 ticks** of `update(1/60)` (~150 sim-sec).
-- Assert no exceptions.
-- Assert `resource_manager.get_global_resource_quantity(ResourceType.BERRY) > 0`.
-- Assert wheat gathered > 0 (check completed tasks or mill input received).
-- Assert flour produced > 0 — check `sum(st.current_output_quantity for st in
-  resource_manager.processing_stations if isinstance(st, Mill))` OR check bakery flour
-  input. With the bug fix, flour reaches the bakery by tick ~4,000.
-- Assert bread produced > 0 — check `sum(st.current_output_quantity.get(ResourceType.BREAD, 0)
-  for st in processing_stations if isinstance(st, Bakery))`. Bread appears ~tick 6,000.
-- Determinism check: same seed twice → same end-state berry count.
-
-**`tests/test_pathfinding.py`**
-- `find_path` on a small `Grid` (mock or real): path found around obstacle, None when
-  blocked, start==goal case.
-- Key import: `from src.pathfinding.astar import find_path` and `from src.rendering.grid import Grid`.
-
-**`tests/test_storage_point.py`**
-- Capacity limits, accepted-type rejection, `reserve_space` / `release_reservation` /
-  `commit_reservation_to_storage` cycle, `reserve_for_pickup` / `release_pickup_reservation`.
-
-**`tests/test_task_lifecycle.py`**
-- A `GatherAndDeliverTask` goes PENDING → ASSIGNED → COMPLETED for one agent in a
-  minimal hand-built world (1 bush, 1 storage, 1 agent adjacent). Use `Simulation` in
-  a very small config or build objects directly — keep it fast.
-
-**Verify after writing:**
-```
-.venv/bin/pytest tests/ -v
-```
-Also deliberately break something (e.g., comment out `station.tick()`) and confirm
-smoke test fails, then revert.
-
-### Task 3 — Declarative task steps
+### Task 3 — Declarative task steps (START HERE next session)
 After Task 2 tests pass and are committed, introduce:
 ```python
 class TaskStep(ABC):
