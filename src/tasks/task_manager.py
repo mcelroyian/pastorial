@@ -1,6 +1,6 @@
 import uuid
 import time
-import logging # Added
+import logging
 from typing import List, Dict, Optional, TYPE_CHECKING
 
 from .task import Task, GatherAndDeliverTask, DeliverWheatToMillTask # Added DeliverWheatToMillTask
@@ -14,24 +14,22 @@ from ..agents.intents import IntentStatus # For type hinting
 # Forward references to avoid circular imports
 if TYPE_CHECKING:
     from ..agents.agent import Agent
-    from ..agents.manager import AgentManager
     from ..resources.manager import ResourceManager
 
 class TaskManager:
     """Manages the creation, assignment, and tracking of tasks for agents."""
 
-    def __init__(self, resource_manager: 'ResourceManager', agent_manager: 'AgentManager'):
+    def __init__(self, resource_manager: 'ResourceManager'):
         self.pending_tasks: List[Task] = []
-        self.assigned_tasks: Dict[uuid.UUID, Task] = {} # agent_id -> Task
-        self.completed_tasks: List[Task] = [] # For history/metrics
-        self.failed_tasks: List[Task] = []     # For analysis/retry
-        
+        self.assigned_tasks: Dict[uuid.UUID, Task] = {}
+        self.completed_tasks: List[Task] = []
+        self.failed_tasks: List[Task] = []
+
         self.resource_manager_ref: 'ResourceManager' = resource_manager
-        self.agent_manager_ref: 'AgentManager' = agent_manager
-        self.logger = logging.getLogger(__name__) # Added
-        
-        self._next_task_check_time: float = time.time()
-        self._task_generation_interval: float = 5.0 # How often to check for new task generation
+        self.logger = logging.getLogger(__name__)
+
+        self._time_since_last_check: float = 0.0
+        self._task_generation_interval: float = 5.0
 
     def add_task(self, task: Task):
         """Adds a pre-created task to the pending list, sorted by priority."""
@@ -314,22 +312,13 @@ class TaskManager:
 
 
     def update(self, dt: float, manual_mode: bool = False):
-        """
-        Periodic update for the TaskManager.
-        - Can generate new tasks based on simulation state (e.g., low resources).
-        - Can re-prioritize tasks.
-        - Can check for timed-out tasks.
-        """
-        current_time = time.time()
-        if current_time >= self._next_task_check_time:
-            self.logger.debug(f"TaskManager: Update - time to check for task generation. Current time: {current_time:.2f}, Next check: {self._next_task_check_time:.2f}") # Changed
+        self._time_since_last_check += dt
+        if self._time_since_last_check >= self._task_generation_interval:
             if not manual_mode:
                 self._generate_tasks_if_needed()
             else:
                 self.logger.debug("Skipping autonomous task generation due to manual control mode.")
-            self._next_task_check_time = current_time + self._task_generation_interval
-        # else:
-            # self.logger.debug(f"TaskManager: Update - NOT time to check for task generation. Current time: {current_time:.2f}, Next check: {self._next_task_check_time:.2f}") # Changed
+            self._time_since_last_check = 0.0
 
 
         # TODO: Check for tasks that are assigned but stuck (e.g., agent died, task timed out)

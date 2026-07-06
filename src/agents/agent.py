@@ -68,15 +68,7 @@ class Agent:
         self.current_intent: Optional[Intent] = None
         self.current_behavior: AgentBehavior = IdleBehavior(self)
 
-        self.behavior_colors = {
-            IdleBehavior: (255, 255, 0), # Yellow
-            MovingBehavior: (0, 200, 50), # Green
-            InteractingBehavior: (50, 150, 255), # Blue
-            PathFailedBehavior: (255, 0, 0), # Red
-            EvaluatingIntentBehavior: (200, 200, 200), # Grey
-        }
-        self.color = (255, 0, 255) # Default color if behavior not in map (Magenta)
-        self.target_position: Optional[pygame.math.Vector2] = None # Current waypoint for pathfinding
+        self.target_position: Optional[pygame.math.Vector2] = None
         self.current_path: Optional[List[pygame.math.Vector2]] = None # For A* path
         self.final_destination: Optional[pygame.math.Vector2] = None # Ultimate goal of a movement sequence (used by set_target)
         self.target_tolerance = 0.1
@@ -469,56 +461,13 @@ class Agent:
             self.logger.debug(f"Is Idle with no intent. Transitioning to EvaluatingIntentBehavior to seek work.")
             self._transition_behavior(EvaluatingIntentBehavior)
 
-    def get_rect(self) -> pygame.Rect:
-        """Returns the agent's bounding box as a pygame.Rect."""
-        screen_pos = self.grid.grid_to_screen(self.position)
-        agent_radius = self.grid.cell_width // 2
-        return pygame.Rect(
-            screen_pos.x - agent_radius,
-            screen_pos.y - agent_radius,
-            agent_radius * 2,
-            agent_radius * 2
-        )
-
-    def v(self):
+    def cancel_current_task(self):
         """Forcefully cancels the agent's current task and intent."""
         self.logger.info(f"Canceling current task and intent.")
         if self.current_intent:
             self.current_intent.status = IntentStatus.CANCELLED
-            # The TaskManager will handle notifying the task object.
-        
         self.current_intent = None
         self.current_path = None
         self.target_position = None
         self.final_destination = None
         self._transition_behavior(IdleBehavior)
-
-    def draw(self, screen: pygame.Surface, grid, selected_agent: Optional['Agent'] = None):
-        """Draws the agent on the screen."""
-        is_selected = (self == selected_agent)
-        screen_pos = self.grid.grid_to_screen(self.position) # type: ignore
-        agent_radius = self.grid.cell_width // 2 # type: ignore
-
-        current_display_color = self.color # Default
-        # Always use new system for color, as old system is being removed.
-        # If no current_intent, it might be in IdleBehavior or EvaluatingIntentBehavior.
-        current_display_color = self.behavior_colors.get(type(self.current_behavior), self.color)
-            
-        pygame.draw.circle(screen, current_display_color, screen_pos, agent_radius)
-
-        if is_selected:
-            pygame.draw.circle(screen, config.COLOR_WHITE, screen_pos, agent_radius + 2, 2)
-
-
-        if self.current_inventory['quantity'] > 0 and self.current_inventory['resource_type'] is not None:
-            carried_resource_type = self.current_inventory['resource_type']
-            # Ensure carried_resource_type is a ResourceType enum or has a .name attribute
-            key_for_color = carried_resource_type.name if hasattr(carried_resource_type, 'name') else str(carried_resource_type)
-            resource_color = self.config.RESOURCE_VISUAL_COLORS.get(key_for_color, (128, 128, 128))
-
-            icon_radius = agent_radius // 2
-            icon_offset_y = -agent_radius - icon_radius // 2
-            icon_center_x = screen_pos[0]
-            icon_center_y = screen_pos[1] + icon_offset_y
-            
-            pygame.draw.circle(screen, resource_color, (icon_center_x, icon_center_y), icon_radius)

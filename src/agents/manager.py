@@ -1,9 +1,10 @@
 import pygame
-import uuid # For generating agent IDs
-import logging # Added
-from typing import List, TYPE_CHECKING, Any, Optional # Added Any, Optional
-from .agent import Agent # Relative import from the same package
+import uuid
+import logging
+from typing import List, TYPE_CHECKING, Optional
+from .agent import Agent
 from ..resources.resource_types import ResourceType
+from ..rendering import agent_renderer
 
 if TYPE_CHECKING:
     from ..tasks.task_manager import TaskManager
@@ -82,10 +83,8 @@ class AgentManager:
             agent.update(dt, resource_manager)
 
     def render_agents(self, screen: pygame.Surface, grid, selected_agent: Optional[Agent] = None):
-        """Renders all managed agents."""
-        # Render agents after other elements like the grid, but potentially before UI
         for agent in self.agents:
-            agent.draw(screen, grid, selected_agent)
+            agent_renderer.draw_agent(agent, screen, grid, selected_agent)
 
     def get_agent_at_position(self, grid_pos: pygame.math.Vector2) -> Optional[Agent]:
         """
