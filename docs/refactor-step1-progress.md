@@ -15,7 +15,7 @@
 |------|-------------|--------|
 | Bug fix | Mill flour output had no delivery path; never reached bakery | ✅ Done (`6a4ab77`) |
 | Task 1 | Headless Simulation class; decouple sim from rendering | ✅ Done (`87ce5f1`) |
-| Task 2 | pytest harness + smoke tests | ✅ Done (commit pending) |
+| Task 2 | pytest harness + smoke tests | ✅ Done (`12172cc`) |
 | Task 3 | Declarative task steps (TaskStep abstraction) | ⬜ Not started |
 | Task 4 | Dead code & comment residue removal | ⬜ Not started |
 | Task 5 | Fix TaskManager/AgentManager init wiring | ✅ Done (folded into Task 1 commit) |
@@ -52,7 +52,7 @@ pushes single-output station buffers directly into the nearest accepting
 python -c "from src.core.simulation import Simulation; s = Simulation(seed=42); [s.update(1/60) for _ in range(600)]"
 ```
 
-### Task 2 (commit pending)
+### Task 2 (commit `12172cc`)
 - **Created `pytest.ini`** — sets `pythonpath = .`, `testpaths = tests`. No other config
   needed; `src` is a PEP 420 namespace package, works without `__init__.py`.
 - **`tests/test_smoke.py`** — 6 tests sharing a module-scoped fixture (9,000-tick run
