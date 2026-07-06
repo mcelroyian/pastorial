@@ -1,12 +1,12 @@
 import pygame
 import heapq # For the priority queue (open list)
-import logging # Added for debugging
+import logging
 from typing import List, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..rendering.grid import Grid # For type hinting Grid class
 
-logger = logging.getLogger(__name__) # Added for debugging
+logger = logging.getLogger(__name__)
 
 # Heuristic function (Manhattan distance for grid)
 def heuristic(a: pygame.math.Vector2, b: pygame.math.Vector2) -> float:

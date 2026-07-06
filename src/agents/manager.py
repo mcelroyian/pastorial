@@ -25,7 +25,7 @@ class AgentManager:
         self.grid = grid # Store the grid object
         self.task_manager_ref: 'TaskManager' = task_manager # Store task_manager reference
         # self.occupancy_grid = occupancy_grid # Removed
-        self.logger = logging.getLogger(__name__) # Added
+        self.logger = logging.getLogger(__name__)
         self.next_agent_number = 1
 
     def add_agent(self, agent: Agent):
@@ -74,7 +74,7 @@ class AgentManager:
             resource_priorities=resource_priorities
         )
         self.add_agent(new_agent)
-        self.logger.info(f"Created agent {agent_name} ({agent_id}) at {position}") # Changed
+        self.logger.info(f"Created agent {agent_name} ({agent_id}) at {position}")
         return new_agent
 
     def update_agents(self, dt: float, resource_manager): # resource_manager type hint can be added

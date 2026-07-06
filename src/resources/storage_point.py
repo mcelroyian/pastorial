@@ -1,6 +1,6 @@
 import pygame
-import uuid # Added for task_id in reservations
-import logging # Added
+import uuid
+import logging
 from typing import List, Dict, Optional
 
 # Assuming ResourceType is defined in resource_types.py
@@ -22,8 +22,8 @@ class StoragePoint:
             accepted_resource_types (Optional[List[ResourceType]]): A list of resource types
                                      this storage point accepts. If None, accepts all types.
         """
-        self.id = uuid.uuid4() # Added for unique identification
-        self.logger = logging.getLogger(__name__) # Added
+        self.id = uuid.uuid4()
+        self.logger = logging.getLogger(__name__)
         self.position = position
         self.overall_capacity = overall_capacity
         self.accepted_resource_types = accepted_resource_types
@@ -90,7 +90,7 @@ class StoragePoint:
         """
         self.logger.debug(f"StoragePoint {self.position} reserve_space: Attempting for task_id={task_id}, resource_type={resource_type.name}, quantity={quantity}")
         if task_id in self.reservations: # Task already has a reservation, should modify or release first
-            self.logger.warning(f"Task {task_id} attempting to reserve space again. Current reservation: {self.reservations[task_id]}") # Changed
+            self.logger.warning(f"Task {task_id} attempting to reserve space again. Current reservation: {self.reservations[task_id]}")
             # Potentially allow modification, but for now, let's assume new reservation means prior one should be handled.
             # Or, this could be an addition to an existing reservation. For simplicity, let's make it overwrite/add.
             # self.reservations[task_id] += quantity_to_reserve ... (this needs careful thought)
@@ -123,7 +123,7 @@ class StoragePoint:
         # Add to existing reservation for the task or create a new one
         current_reservation_for_task = self.reservations.get(task_id, 0)
         self.reservations[task_id] = current_reservation_for_task + quantity_to_reserve
-        self.logger.info(f"Storage at {self.position} reserved {quantity_to_reserve} for task {task_id} (previous for task: {current_reservation_for_task}, new total for task: {self.reservations[task_id]}). Total all reservations: {self.get_total_reserved_quantity()}") # Changed
+        self.logger.info(f"Storage at {self.position} reserved {quantity_to_reserve} for task {task_id} (previous for task: {current_reservation_for_task}, new total for task: {self.reservations[task_id]}). Total all reservations: {self.get_total_reserved_quantity()}")
         return quantity_to_reserve
 
     def release_reservation(self, task_id: uuid.UUID, quantity_to_release: Optional[int] = None) -> bool:
@@ -143,10 +143,10 @@ class StoragePoint:
         
         if quantity_to_release is None or quantity_to_release >= self.reservations[task_id]:
             released_amount = self.reservations.pop(task_id)
-            self.logger.info(f"Storage at {self.position} fully released reservation of {released_amount} for task {task_id}.") # Changed
+            self.logger.info(f"Storage at {self.position} fully released reservation of {released_amount} for task {task_id}.")
         else:
             self.reservations[task_id] -= quantity_to_release
-            self.logger.info(f"Storage at {self.position} reduced reservation by {quantity_to_release} for task {task_id}. Remaining: {self.reservations[task_id]}") # Changed
+            self.logger.info(f"Storage at {self.position} reduced reservation by {quantity_to_release} for task {task_id}. Remaining: {self.reservations[task_id]}")
         return True
 
     def commit_reservation_to_storage(self, task_id: uuid.UUID, resource_type: ResourceType, quantity_to_add: int) -> int:
@@ -163,12 +163,12 @@ class StoragePoint:
             int: The actual quantity added to storage.
         """
         if task_id not in self.reservations:
-            self.logger.error(f"Task {task_id} has no reservation at {self.position} to commit.") # Changed
+            self.logger.error(f"Task {task_id} has no reservation at {self.position} to commit.")
             return 0 # No reservation for this task
 
         reserved_for_task = self.reservations[task_id]
         if quantity_to_add > reserved_for_task:
-            self.logger.warning(f"Task {task_id} trying to commit {quantity_to_add} but only {reserved_for_task} reserved. Committing max reserved.") # Changed
+            self.logger.warning(f"Task {task_id} trying to commit {quantity_to_add} but only {reserved_for_task} reserved. Committing max reserved.")
             quantity_to_add = reserved_for_task # Cannot add more than reserved by this task
 
         # Actual addition to storage - this uses the existing add_resource logic but bypasses some checks
@@ -179,7 +179,7 @@ class StoragePoint:
         # Simplified: directly add to stored_resources and adjust reservation
         # Check if type is accepted (should have been checked at reservation time too)
         if self.accepted_resource_types is not None and resource_type not in self.accepted_resource_types:
-            self.logger.error(f"Task {task_id} trying to commit unaccepted type {resource_type.name} at {self.position}.") # Changed
+            self.logger.error(f"Task {task_id} trying to commit unaccepted type {resource_type.name} at {self.position}.")
             return 0 # Should not happen if reservation was done correctly
 
         # Check if physical space is available (current_load + quantity_to_add <= overall_capacity)
@@ -190,7 +190,7 @@ class StoragePoint:
             # For now, only add what physically fits.
             can_physically_add = self.overall_capacity - self.get_current_load()
             if quantity_to_add > can_physically_add:
-                 self.logger.critical(f"Task {task_id} at {self.position}: Physical space ({can_physically_add}) less than committed quantity ({quantity_to_add}) from reservation. Data integrity issue or race condition?") # Changed
+                 self.logger.critical(f"Task {task_id} at {self.position}: Physical space ({can_physically_add}) less than committed quantity ({quantity_to_add}) from reservation. Data integrity issue or race condition?")
                  quantity_to_add = can_physically_add
             
             if quantity_to_add <= 0:
@@ -207,7 +207,7 @@ class StoragePoint:
             else:
                 self.reservations[task_id] -= quantity_to_add
             
-            self.logger.info(f"Storage at {self.position} committed {quantity_to_add} of {resource_type.name} from task {task_id}. Stored: {self.stored_resources.get(resource_type, 0)}, Remaining Res for task: {self.reservations.get(task_id, 0)}") # Changed
+            self.logger.info(f"Storage at {self.position} committed {quantity_to_add} of {resource_type.name} from task {task_id}. Stored: {self.stored_resources.get(resource_type, 0)}, Remaining Res for task: {self.reservations.get(task_id, 0)}")
             return quantity_to_add
         return 0
 
@@ -243,7 +243,7 @@ class StoragePoint:
         if quantity_to_add > 0:
             current_amount = self.stored_resources.get(resource_type, 0)
             self.stored_resources[resource_type] = current_amount + quantity_to_add
-            self.logger.info(f"Storage at {self.position} (direct add) received {quantity_to_add} of {resource_type.name}. Total stored: {self.stored_resources.get(resource_type, 0)}") # Changed
+            self.logger.info(f"Storage at {self.position} (direct add) received {quantity_to_add} of {resource_type.name}. Total stored: {self.stored_resources.get(resource_type, 0)}")
         return quantity_to_add
 
     # --- Methods for Reserving and Collecting Stored Resources ---
@@ -276,7 +276,7 @@ class StoragePoint:
             not enough is available or 0 if type not present.
         """
         if self.accepted_resource_types is not None and resource_type not in self.accepted_resource_types:
-            self.logger.warning(f"Storage at {self.position} cannot reserve {resource_type.name} for pickup: type not accepted.") # Changed
+            self.logger.warning(f"Storage at {self.position} cannot reserve {resource_type.name} for pickup: type not accepted.")
             return 0
 
         # Calculate available (unreserved for pickup) quantity of the resource
@@ -291,7 +291,7 @@ class StoragePoint:
         quantity_to_reserve = min(quantity, available_for_this_pickup_reservation)
 
         if quantity_to_reserve <= 0:
-            self.logger.info(f"Storage at {self.position} has no {resource_type.name} available to reserve for pickup by task {task_id} (requested {quantity}, available {available_for_this_pickup_reservation}).") # Changed
+            self.logger.info(f"Storage at {self.position} has no {resource_type.name} available to reserve for pickup by task {task_id} (requested {quantity}, available {available_for_this_pickup_reservation}).")
             return 0
 
         if task_id not in self.pickup_reservations:
@@ -300,7 +300,7 @@ class StoragePoint:
         current_task_reservation_for_type = self.pickup_reservations[task_id].get(resource_type, 0)
         self.pickup_reservations[task_id][resource_type] = current_task_reservation_for_type + quantity_to_reserve
         
-        self.logger.info(f"Storage at {self.position} reserved {quantity_to_reserve} of {resource_type.name} for PICKUP by task {task_id}. Total for task: {self.pickup_reservations[task_id][resource_type]}") # Changed
+        self.logger.info(f"Storage at {self.position} reserved {quantity_to_reserve} of {resource_type.name} for PICKUP by task {task_id}. Total for task: {self.pickup_reservations[task_id][resource_type]}")
         return quantity_to_reserve
 
     def release_pickup_reservation(self, task_id: uuid.UUID, resource_type: Optional[ResourceType] = None, quantity_to_release: Optional[int] = None) -> bool:
@@ -320,7 +320,7 @@ class StoragePoint:
 
         if resource_type is None: # Release all reservations for this task
             released_details = self.pickup_reservations.pop(task_id)
-            self.logger.info(f"Storage at {self.position} fully released all pickup reservations for task {task_id}: {released_details}") # Changed
+            self.logger.info(f"Storage at {self.position} fully released all pickup reservations for task {task_id}: {released_details}")
             return True
 
         if resource_type not in self.pickup_reservations[task_id]:
@@ -328,12 +328,12 @@ class StoragePoint:
 
         if quantity_to_release is None or quantity_to_release >= self.pickup_reservations[task_id][resource_type]:
             released_amount = self.pickup_reservations[task_id].pop(resource_type)
-            self.logger.info(f"Storage at {self.position} fully released pickup reservation of {released_amount} {resource_type.name} for task {task_id}.") # Changed
+            self.logger.info(f"Storage at {self.position} fully released pickup reservation of {released_amount} {resource_type.name} for task {task_id}.")
             if not self.pickup_reservations[task_id]: # If no more types reserved for this task
                 del self.pickup_reservations[task_id]
         else:
             self.pickup_reservations[task_id][resource_type] -= quantity_to_release
-            self.logger.info(f"Storage at {self.position} reduced pickup reservation of {resource_type.name} by {quantity_to_release} for task {task_id}. Remaining: {self.pickup_reservations[task_id][resource_type]}") # Changed
+            self.logger.info(f"Storage at {self.position} reduced pickup reservation of {resource_type.name} by {quantity_to_release} for task {task_id}. Remaining: {self.pickup_reservations[task_id][resource_type]}")
         return True
 
     def collect_reserved_pickup(self, task_id: uuid.UUID, resource_type_to_collect: ResourceType, max_quantity_agent_can_carry: int) -> int:
@@ -350,7 +350,7 @@ class StoragePoint:
             The actual quantity collected.
         """
         if task_id not in self.pickup_reservations or resource_type_to_collect not in self.pickup_reservations[task_id]:
-            self.logger.error(f"Task {task_id} has no pickup reservation for {resource_type_to_collect.name} at {self.position}.") # Changed
+            self.logger.error(f"Task {task_id} has no pickup reservation for {resource_type_to_collect.name} at {self.position}.")
             return 0
 
         reserved_for_task_type = self.pickup_reservations[task_id][resource_type_to_collect]
@@ -361,7 +361,7 @@ class StoragePoint:
         quantity_to_collect = min(reserved_for_task_type, max_quantity_agent_can_carry, physically_in_stock)
 
         if quantity_to_collect <= 0:
-            self.logger.info(f"Storage at {self.position}: Task {task_id} cannot collect {resource_type_to_collect.name}. Reserved: {reserved_for_task_type}, Can Carry: {max_quantity_agent_can_carry}, In Stock: {physically_in_stock}") # Changed
+            self.logger.info(f"Storage at {self.position}: Task {task_id} cannot collect {resource_type_to_collect.name}. Reserved: {reserved_for_task_type}, Can Carry: {max_quantity_agent_can_carry}, In Stock: {physically_in_stock}")
             return 0
         
         # Reduce physical stock
@@ -376,7 +376,7 @@ class StoragePoint:
             if not self.pickup_reservations[task_id]: # If no more types reserved for this task
                 del self.pickup_reservations[task_id]
         
-        self.logger.info(f"Storage at {self.position}: Task {task_id} collected {quantity_to_collect} of {resource_type_to_collect.name}. Remaining stock: {self.stored_resources.get(resource_type_to_collect, 0)}, Remaining pickup reservation for type: {self.pickup_reservations.get(task_id, {}).get(resource_type_to_collect, 0)}") # Changed
+        self.logger.info(f"Storage at {self.position}: Task {task_id} collected {quantity_to_collect} of {resource_type_to_collect.name}. Remaining stock: {self.stored_resources.get(resource_type_to_collect, 0)}, Remaining pickup reservation for type: {self.pickup_reservations.get(task_id, {}).get(resource_type_to_collect, 0)}")
         return quantity_to_collect
 
     def draw(self, screen: pygame.Surface, grid):

@@ -16,7 +16,7 @@
 | Bug fix | Mill flour output had no delivery path; never reached bakery | ✅ Done (`6a4ab77`) |
 | Task 1 | Headless Simulation class; decouple sim from rendering | ✅ Done (`87ce5f1`) |
 | Task 2 | pytest harness + smoke tests | ✅ Done (`12172cc`) |
-| Task 3 | Declarative task steps (TaskStep abstraction) | ⬜ Not started |
+| Task 3 | Declarative task steps (TaskStep abstraction) | ✅ Done (`4681c1e`) |
 | Task 4 | Dead code & comment residue removal | ⬜ Not started |
 | Task 5 | Fix TaskManager/AgentManager init wiring | ✅ Done (folded into Task 1 commit) |
 
@@ -91,17 +91,17 @@ The `TaskManager(resource_manager, agent_manager=None)` + post-init patch was re
 
 ## What Comes Next
 
-### Task 3 — Declarative task steps (START HERE next session)
-After Task 2 tests pass and are committed, introduce:
-```python
-class TaskStep(ABC):
-    def create_intent(self, agent, task) -> Intent: ...
-    def on_success(self, agent, task, resource_manager) -> None: ...
-```
-Rewrite `GatherAndDeliverTask` and `DeliverWheatToMillTask` using a step list.
-The big `on_intent_outcome` switch blocks should disappear.
-Add a trivial `PatrolTask` (A→B→A) as proof-of-cost (~20 lines). All Task 2 tests
-must still pass unchanged.
+### Task 4 — Dead code removal (START HERE next session)
+Done in commit `4681c1e`.
+
+**What was done:**
+- `TaskStep` ABC with `create_intent` and `on_success` in `task.py`
+- Concrete steps: `MoveToStep(pos_provider)`, `InteractStep(target_id_provider, interaction_type, duration_provider, on_complete)`
+- Base `Task` gains `steps`, `current_step_index`, `_submit_next_step()`, and a generic `on_intent_outcome` (no longer abstract)
+- `GatherAndDeliverTask` and `DeliverWheatToMillTask` rewritten; their per-class `on_intent_outcome` bodies removed
+- `PatrolTask` added as 22-line proof-of-cost
+- `IN_PROGRESS` and `PATROL` added to `task_types.py`; granular `IN_PROGRESS_*` statuses kept (dead — Task 4 removes them)
+- 24 tests pass (1 new patrol test added)
 
 ### Task 4 — Dead code removal
 - `grep -rn "# Added\|# Changed" src/` → remove all hits.

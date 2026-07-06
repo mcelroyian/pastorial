@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ..tasks.task_manager import TaskManager
     from ..tasks.task import Task, GatherAndDeliverTask
-    from ..tasks.task_types import TaskStatus # Added for explicit reference if needed by _render_task_details
+    from ..tasks.task_types import TaskStatus
     from ..core import config # For potential color or layout configs
 
 class TaskStatusDisplay:

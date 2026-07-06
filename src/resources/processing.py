@@ -1,6 +1,6 @@
 import pygame
-import logging # Added
-import uuid # Added for unique id
+import logging
+import uuid
 from typing import Optional, Dict
 from src.resources.resource_types import ResourceType
 from src.core import config # For potential future use, e.g. visual configuration
@@ -39,10 +39,10 @@ class ProcessingStation:
            input_capacity: Maximum amount of input resources the station can hold.
            output_capacity: Maximum amount of output resources the station can hold.
        """
-        self.id = uuid.uuid4() # Added for unique identification
-        self.logger = logging.getLogger(__name__) # Added
+        self.id = uuid.uuid4()
+        self.logger = logging.getLogger(__name__)
         if not isinstance(position, pygame.Vector2):
-            self.logger.critical("Position must be a pygame.Vector2") # Added
+            self.logger.critical("Position must be a pygame.Vector2")
             raise TypeError("Position must be a pygame.Vector2")
 
         self.position = position
@@ -72,9 +72,9 @@ class ProcessingStation:
             amount_to_add = min(float(quantity), self.input_capacity - self.current_input_quantity)
             if amount_to_add > 0:
                 self.current_input_quantity += amount_to_add
-                self.logger.debug(f"{self} received {amount_to_add} of {resource_type.name}. Input: {self.current_input_quantity}") # Changed
+                self.logger.debug(f"{self} received {amount_to_add} of {resource_type.name}. Input: {self.current_input_quantity}")
                 return True
-        self.logger.debug(f"{self} FAILED to receive {quantity} of {resource_type.name}. Input: {self.current_input_quantity}, Capacity: {self.input_capacity}, Accepted: {self.accepted_input_type.name}") # Changed
+        self.logger.debug(f"{self} FAILED to receive {quantity} of {resource_type.name}. Input: {self.current_input_quantity}, Capacity: {self.input_capacity}, Accepted: {self.accepted_input_type.name}")
         return False
 
     def tick(self):
@@ -100,7 +100,7 @@ class ProcessingStation:
                 
                 # If we couldn't produce the full amount due to output capacity,
                 # the input was still consumed. This implies a need for agents to clear output.
-                self.logger.debug(f"{self} processed. Input: {self.current_input_quantity}, Output: {self.current_output_quantity}") # Changed
+                self.logger.debug(f"{self} processed. Input: {self.current_input_quantity}, Output: {self.current_output_quantity}")
 
                 if self.current_input_quantity < 1.0 or self.current_output_quantity >= self.output_capacity:
                     self.is_processing = False # Stop if no more input or output full
@@ -118,7 +118,7 @@ class ProcessingStation:
 
         if amount_to_dispense > 0:
             self.current_output_quantity -= float(amount_to_dispense)
-            self.logger.debug(f"{self} dispensed {amount_to_dispense} of {self.produced_output_type.name}. Output: {self.current_output_quantity}") # Changed
+            self.logger.debug(f"{self} dispensed {amount_to_dispense} of {self.produced_output_type.name}. Output: {self.current_output_quantity}")
             return amount_to_dispense
         return 0
 
