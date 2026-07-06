@@ -56,10 +56,12 @@ class GameLoop:
         self.inspector_display = InspectorDisplay(surface=self.screen, font=self.ui_font)
 
     def _get_agent_display_data(self, agent: Agent) -> Dict[str, Any]:
+        hunger = agent.needs.hunger if hasattr(agent, 'needs') else 1.0
         agent_data = {
             'name': agent.name,
             'id': agent.id,
             'position': f"({agent.position.x:.1f}, {agent.position.y:.1f})",
+            'hunger': f"{hunger:.0%}",
             'inventory': {
                 'type': agent.current_inventory['resource_type'].name if agent.current_inventory['resource_type'] else 'None',
                 'quantity': agent.current_inventory['quantity'],
@@ -99,6 +101,10 @@ class GameLoop:
         self.sim.update(dt, self.manual_control_mode)
 
     def render(self):
+        # Clear selection if the selected agent has died
+        if self.selected_agent and self.selected_agent not in self.sim.agent_manager.agents:
+            self.selected_agent = None
+
         self.screen.fill(config.COLOR_BLACK)
         self.sim.grid.draw(self.screen)
         self.sim.resource_manager.draw_nodes(self.screen, self.resource_font, self.sim.grid)

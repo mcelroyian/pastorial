@@ -5,6 +5,7 @@ from typing import List, TYPE_CHECKING, Optional
 from .agent import Agent
 from ..resources.resource_types import ResourceType
 from ..rendering import agent_renderer
+from ..tasks.task_types import TaskStatus
 
 if TYPE_CHECKING:
     from ..tasks.task_manager import TaskManager
@@ -77,10 +78,37 @@ class AgentManager:
         self.logger.info(f"Created agent {agent_name} ({agent_id}) at {position}")
         return new_agent
 
-    def update_agents(self, dt: float, resource_manager): # resource_manager type hint can be added
-        """Updates all managed agents."""
+    def update_agents(self, dt: float, resource_manager) -> None:
+        """Updates all agents; removes those that have starved to death."""
+        dead = []
         for agent in self.agents:
             agent.update(dt, resource_manager)
+            if agent.needs.is_dead:
+                dead.append(agent)
+        for agent in dead:
+            self._remove_dead_agent(agent, resource_manager)
+
+    def _remove_dead_agent(self, agent, resource_manager) -> None:
+        self.logger.warning(f"Agent {agent.name} ({agent.id}) starved to death.")
+
+        # Release current task claims and re-post to job board
+        current_task = self.task_manager_ref.assigned_tasks.get(agent.id)
+        if current_task is not None:
+            current_task.cleanup(agent, resource_manager, success=False)
+            self.task_manager_ref.report_task_outcome(current_task, TaskStatus.FAILED, agent)
+
+        # Drop carried inventory (log and discard; no item-on-ground yet)
+        qty = agent.current_inventory.get('quantity', 0)
+        if qty:
+            self.logger.info(f"Agent {agent.name} dropped {qty}x {agent.current_inventory.get('resource_type')} on death (discarded).")
+        agent.current_inventory['quantity'] = 0
+        agent.current_inventory['resource_type'] = None
+
+        # Clear grid occupancy at agent's current position
+        gx, gy = int(round(agent.position.x)), int(round(agent.position.y))
+        self.grid.update_occupancy(agent, gx, gy, 1, 1, is_placing=False)
+
+        self.agents.remove(agent)
 
     def render_agents(self, screen: pygame.Surface, grid, selected_agent: Optional[Agent] = None):
         for agent in self.agents:
