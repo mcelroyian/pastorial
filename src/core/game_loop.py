@@ -57,9 +57,16 @@ class GameLoop:
 
     def _get_agent_display_data(self, agent: Agent) -> Dict[str, Any]:
         hunger = agent.needs.hunger if hasattr(agent, 'needs') else 1.0
+        faction_id = getattr(agent, 'owner_faction_id', None)
+        faction_name = "—"
+        if faction_id is not None:
+            for f in self.sim.factions:
+                if f.faction_id == faction_id:
+                    faction_name = f.name
+                    break
         agent_data = {
             'name': agent.name,
-            'id': agent.id,
+            'faction': f"{faction_name} (id={faction_id})" if faction_id is not None else "—",
             'position': f"({agent.position.x:.1f}, {agent.position.y:.1f})",
             'hunger': f"{hunger:.0%}",
             'inventory': {
@@ -70,8 +77,10 @@ class GameLoop:
             'intent': agent.current_intent.get_description() if agent.current_intent else 'None',
             'task': 'None',
         }
+        # Use agent's own task manager for lookup
+        agent_tm = getattr(agent, 'task_manager_ref', self.sim.task_manager)
         if agent.current_intent and agent.current_intent.originating_task_id:
-            task = self.sim.task_manager.get_task_by_id(agent.current_intent.originating_task_id)
+            task = agent_tm.get_task_by_id(agent.current_intent.originating_task_id)
             if task:
                 agent_data['task'] = {
                     'type': task.task_type.name,

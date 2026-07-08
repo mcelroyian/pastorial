@@ -10,26 +10,44 @@ from src.agents.agent_behaviors import (
 )
 from src.core import config
 
-_BEHAVIOR_COLORS = {
-    IdleBehavior: (255, 255, 0),
-    MovingBehavior: (0, 200, 50),
-    InteractingBehavior: (50, 150, 255),
-    PathFailedBehavior: (255, 0, 0),
-    EvaluatingIntentBehavior: (200, 200, 200),
+# Behavior ring colors (thin outline around the agent circle)
+_BEHAVIOR_RING_COLORS = {
+    IdleBehavior: (255, 255, 0),         # yellow = idle
+    MovingBehavior: (0, 200, 50),         # green = moving
+    InteractingBehavior: (50, 150, 255),  # blue = interacting
+    PathFailedBehavior: (255, 0, 0),      # red = stuck
+    EvaluatingIntentBehavior: (180, 180, 180),  # grey = thinking
 }
-_DEFAULT_COLOR = (255, 0, 255)
+_DEFAULT_RING = (255, 0, 255)
+
+# Fallback fill when no faction is assigned
+_NO_FACTION_COLOR = (160, 160, 160)
 
 
 def draw_agent(agent: 'Agent', screen: pygame.Surface, grid, selected_agent: Optional['Agent'] = None):
     screen_pos = grid.grid_to_screen(agent.position)
     agent_radius = grid.cell_width // 2
 
-    color = _BEHAVIOR_COLORS.get(type(agent.current_behavior), _DEFAULT_COLOR)
-    pygame.draw.circle(screen, color, screen_pos, agent_radius)
+    # Body fill = faction color
+    faction_id = getattr(agent, 'owner_faction_id', None)
+    if faction_id is not None:
+        from src.core.config import FACTION_CONFIGS
+        cfg = FACTION_CONFIGS[faction_id] if faction_id < len(FACTION_CONFIGS) else {}
+        fill_color = cfg.get("color", _NO_FACTION_COLOR)
+    else:
+        fill_color = _NO_FACTION_COLOR
 
+    pygame.draw.circle(screen, fill_color, screen_pos, agent_radius)
+
+    # Behavior ring (thin outline)
+    ring_color = _BEHAVIOR_RING_COLORS.get(type(agent.current_behavior), _DEFAULT_RING)
+    pygame.draw.circle(screen, ring_color, screen_pos, agent_radius, 2)
+
+    # Selection ring (white, slightly larger)
     if agent is selected_agent:
-        pygame.draw.circle(screen, config.COLOR_WHITE, screen_pos, agent_radius + 2, 2)
+        pygame.draw.circle(screen, config.COLOR_WHITE, screen_pos, agent_radius + 3, 2)
 
+    # Carried-resource icon above the agent
     if agent.current_inventory['quantity'] > 0 and agent.current_inventory['resource_type'] is not None:
         carried = agent.current_inventory['resource_type']
         resource_color = config.RESOURCE_VISUAL_COLORS.get(carried, (128, 128, 128))
@@ -47,10 +65,8 @@ def draw_agent(agent: 'Agent', screen: pygame.Surface, grid, selected_agent: Opt
         bar_h = 3
         bar_x = screen_pos[0] - agent_radius
         bar_y = screen_pos[1] + agent_radius + 2
-        # background
         pygame.draw.rect(screen, (60, 60, 60), (bar_x, bar_y, bar_w, bar_h))
-        # fill: green → red as hunger drops
         hunger = agent.needs.hunger
-        fill_color = (int(255 * (1 - hunger)), int(255 * hunger), 0)
+        fill_color_bar = (int(255 * (1 - hunger)), int(255 * hunger), 0)
         fill_w = max(1, int(bar_w * hunger))
-        pygame.draw.rect(screen, fill_color, (bar_x, bar_y, fill_w, bar_h))
+        pygame.draw.rect(screen, fill_color_bar, (bar_x, bar_y, fill_w, bar_h))

@@ -1,4 +1,4 @@
-# Balance Notes — Needs Economy (Plan 2)
+# Balance Notes — Plan 3: Factions (updated) / Plan 2: Needs Economy
 
 Reference run: seed=42, 20 sim-minutes, `balance_report.py`.
 
@@ -42,3 +42,45 @@ Water gathered: 4
 ## Balance levers for Phase 4
 
 To induce scarcity (trigger raiding): raise `BAKERY_PROCESSING_SPEED`, reduce `INITIAL_BAKERIES` to 0, or increase `INITIAL_AGENTS`. The current equilibrium sits near the comfortable edge so Phase 4 only needs a small perturbation to make food a contested resource.
+
+---
+
+## Plan 3 Additions — Factions
+
+### Faction layout (config.py)
+
+| Constant | Value | Rationale |
+|---|---|---|
+| `NUM_FACTIONS` | `2` | Redwood (west) + Ashford (east) |
+| `PER_FACTION_AGENTS` | `3` | 6 total — same as Plan 2 |
+| `PER_FACTION_MILLS` | `1` | 2 total — same as Plan 2 |
+| `PER_FACTION_BAKERIES` | `1` | 2 total (doubled from Plan 2) |
+| `PER_FACTION_WELLS` | `1` | 2 total |
+| `PER_FACTION_INITIAL_BREAD` | `12` | 4 per agent per faction |
+| `WILD_BERRY_BUSHES` | `15` | Shared, NOT scaled with factions |
+| `WILD_WHEAT_FIELDS` | `15` | Shared, concentrated in center strip |
+
+### Reference run results (seed=42, 2 factions, 20 min)
+
+```
+Agents alive:  6 / 6   (100%)
+Deaths:        0
+Both factions consumed bread: yes
+```
+
+### Key design decisions (Plan 3)
+
+**Wild nodes in center strip**: Berry bushes and wheat fields spawn only in cols 13–26 (the center third). Both factions start with resources in their home zone (pre-stocked bread, bakery flour/water), then must push into the center as local supplies run out. This creates natural progression toward competition without any aggression code.
+
+**Per-faction task managers**: Each faction's `TaskManager` queries only its own storage/stations for stock levels and task targeting. Wild nodes (owner=None) remain claimable by any agent — first-come, first-served via the existing `ResourceNode.claim()` system.
+
+**Storage enforcement at storage layer**: `StoragePoint.can_accept / reserve_space / reserve_for_pickup` check `_faction_allowed(faction_id)`. Phase 4 can bypass this check explicitly when implementing theft.
+
+**`_auto_distribute_outputs` faction-aware**: Mill → only same-faction bakery. Bakery → only same-faction storage. This prevents bread from leaking across faction boundaries in the auto-routing path.
+
+### Balance levers for Phase 4 (2-faction world)
+
+With the center strip as contested ground, Phase 4 can trigger raiding by:
+- Using `SCARCITY` scenario (wild nodes halved) — both factions feel pressure simultaneously
+- Using `ASYMMETRIC` scenario — faction 1 starts weak, providing asymmetric motivation
+- Reducing `WILD_BERRY_BUSHES` / `WILD_WHEAT_FIELDS` below 8 per type to force depletion within 5 min

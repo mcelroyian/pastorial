@@ -132,11 +132,13 @@ class TaskManager:
                 self.metrics.record("task_completed", task_type=task.task_type.name)
                 if isinstance(task, EatTask):
                     from ..resources.resource_types import ResourceType
-                    self.metrics.record("consumed", resource_type=ResourceType.BREAD, quantity=1)
+                    self.metrics.record("consumed", resource_type=ResourceType.BREAD, quantity=1,
+                                        faction_id=self.faction_id)
                 elif isinstance(task, GatherAndDeliverTask) and task.quantity_delivered > 0:
                     self.metrics.record("gathered",
                                         resource_type=task.resource_type_to_gather,
-                                        quantity=task.quantity_delivered)
+                                        quantity=task.quantity_delivered,
+                                        faction_id=self.faction_id)
         elif final_status == TaskStatus.FAILED:
             self.failed_tasks.append(task)
             self.logger.warning(f"TaskManager: Task {task.task_id} FAILED for agent {agent.id}. Reason: {task.error_message}.")

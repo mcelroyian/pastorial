@@ -403,7 +403,14 @@ class StoragePoint:
     def draw(self, screen: pygame.Surface, grid):
         """Draws the storage point on the screen."""
         screen_pos = grid.grid_to_screen(self.position)
-        color = (128, 128, 128) # Grey for storage
+        color = (128, 128, 128)
         radius = grid.cell_width // 2
-        pygame.draw.rect(screen, color, (screen_pos[0] - radius, screen_pos[1] - radius, grid.cell_width, grid.cell_height))
+        rect = (screen_pos[0] - radius, screen_pos[1] - radius, grid.cell_width, grid.cell_height)
+        pygame.draw.rect(screen, color, rect)
+        # Faction-colored border
+        if self.owner_faction_id is not None:
+            from src.core.config import FACTION_CONFIGS
+            cfg = FACTION_CONFIGS[self.owner_faction_id] if self.owner_faction_id < len(FACTION_CONFIGS) else {}
+            border_color = cfg.get("color", (255, 255, 255))
+            pygame.draw.rect(screen, border_color, rect, 2)
         # Optionally, draw stored resource counts or indicators

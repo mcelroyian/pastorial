@@ -147,7 +147,12 @@ class ProcessingStation:
 
         current_color = self.processing_color if self.is_processing else self.color
         pygame.draw.rect(surface, current_color, station_rect)
-        pygame.draw.rect(surface, config.COLOR_BLACK, station_rect, 1) # Border
+        pygame.draw.rect(surface, config.COLOR_BLACK, station_rect, 1)
+        if self.owner_faction_id is not None:
+            faction_cfgs = getattr(config, 'FACTION_CONFIGS', [])
+            if self.owner_faction_id < len(faction_cfgs):
+                border_color = faction_cfgs[self.owner_faction_id].get("color", (255, 255, 255))
+                pygame.draw.rect(surface, border_color, station_rect, 3)
 
         # Display input: "I:type qty/cap"
         input_text_str = f"I:{self.accepted_input_type.name[0]}:{int(self.current_input_quantity)}/{self.input_capacity}"
@@ -311,6 +316,11 @@ class MultiInputProcessingStation(ProcessingStation):
         current_color = self.processing_color if self.is_processing else self.color
         pygame.draw.rect(surface, current_color, station_rect)
         pygame.draw.rect(surface, config.COLOR_BLACK, station_rect, 1)
+        if self.owner_faction_id is not None:
+            faction_cfgs = getattr(config, 'FACTION_CONFIGS', [])
+            if self.owner_faction_id < len(faction_cfgs):
+                border_color = faction_cfgs[self.owner_faction_id].get("color", (255, 255, 255))
+                pygame.draw.rect(surface, border_color, station_rect, 3)
 
         # Simplified display for multiple inputs/outputs
         # TODO: A more robust UI for this might be needed
