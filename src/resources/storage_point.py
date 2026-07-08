@@ -31,6 +31,7 @@ class StoragePoint:
         self.reservations: Dict[uuid.UUID, int] = {} # task_id -> reserved_quantity (for drop-off)
         # For reserving existing stock for pickup by a task
         self.pickup_reservations: Dict[uuid.UUID, Dict[ResourceType, int]] = {} # task_id -> {resource_type: quantity}
+        self.owner_faction_id: Optional[int] = None  # None = accepts anyone
 
     def get_current_load(self) -> int:
         """Returns the total quantity of all resources currently physically stored."""
@@ -49,13 +50,25 @@ class StoragePoint:
         self.logger.debug(f"StoragePoint {self.position} get_available_capacity_for_reservation: Overall={overall_capacity}, Load={current_load}, Reserved={total_reserved}, Available={available_capacity}")
         return available_capacity
 
-    def can_accept(self, resource_type: ResourceType, quantity: int, for_reservation: bool = False) -> bool:
+    def _faction_allowed(self, faction_id: Optional[int]) -> bool:
+        """Returns False if this storage belongs to a faction and the caller's faction doesn't match."""
+        if self.owner_faction_id is None:
+            return True
+        if faction_id is None:
+            return True
+        return self.owner_faction_id == faction_id
+
+    def can_accept(self, resource_type: ResourceType, quantity: int, for_reservation: bool = False,
+                   faction_id: Optional[int] = None) -> bool:
         """
         Checks if the storage point can accept a given quantity of a resource type.
         If for_reservation is True, checks against capacity available for new reservations.
         Otherwise, checks against overall capacity minus existing reservations (for direct non-task additions).
         """
         self.logger.debug(f"StoragePoint {self.position} can_accept: Checking for type={resource_type.name}, quantity={quantity}, for_reservation={for_reservation}")
+        if not self._faction_allowed(faction_id):
+            self.logger.debug(f"StoragePoint {self.position} can_accept: faction {faction_id} blocked (owner={self.owner_faction_id}).")
+            return False
         if self.accepted_resource_types is not None and resource_type not in self.accepted_resource_types:
             self.logger.debug(f"StoragePoint {self.position} can_accept: Type {resource_type.name} not in accepted_resource_types. Result: False")
             return False
@@ -75,7 +88,8 @@ class StoragePoint:
         self.logger.debug(f"StoragePoint {self.position} can_accept: All checks passed. Result: True")
         return True
 
-    def reserve_space(self, task_id: uuid.UUID, resource_type: ResourceType, quantity: int) -> int:
+    def reserve_space(self, task_id: uuid.UUID, resource_type: ResourceType, quantity: int,
+                      faction_id: Optional[int] = None) -> int:
         """
         Attempts to reserve space for a given task.
 
@@ -89,6 +103,9 @@ class StoragePoint:
                  not enough space is available or 0 if type not accepted or no space.
         """
         self.logger.debug(f"StoragePoint {self.position} reserve_space: Attempting for task_id={task_id}, resource_type={resource_type.name}, quantity={quantity}")
+        if not self._faction_allowed(faction_id):
+            self.logger.debug(f"StoragePoint {self.position} reserve_space: faction {faction_id} blocked (owner={self.owner_faction_id}).")
+            return 0
         if task_id in self.reservations: # Task already has a reservation, should modify or release first
             self.logger.warning(f"Task {task_id} attempting to reserve space again. Current reservation: {self.reservations[task_id]}")
             # Potentially allow modification, but for now, let's assume new reservation means prior one should be handled.
@@ -262,7 +279,8 @@ class StoragePoint:
                 total_reserved += details.get(resource_type, 0)
         return total_reserved
 
-    def reserve_for_pickup(self, task_id: uuid.UUID, resource_type: ResourceType, quantity: int) -> int:
+    def reserve_for_pickup(self, task_id: uuid.UUID, resource_type: ResourceType, quantity: int,
+                           faction_id: Optional[int] = None) -> int:
         """
         Attempts to reserve a quantity of an existing resource for a task to pick up.
 
@@ -275,6 +293,9 @@ class StoragePoint:
             The actual quantity reserved for pickup. Can be less than requested if
             not enough is available or 0 if type not present.
         """
+        if not self._faction_allowed(faction_id):
+            self.logger.debug(f"StoragePoint {self.position} reserve_for_pickup: faction {faction_id} blocked (owner={self.owner_faction_id}).")
+            return 0
         if self.accepted_resource_types is not None and resource_type not in self.accepted_resource_types:
             self.logger.warning(f"Storage at {self.position} cannot reserve {resource_type.name} for pickup: type not accepted.")
             return 0

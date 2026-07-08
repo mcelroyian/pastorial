@@ -31,6 +31,8 @@ class ResourceNode(ABC):
         self.current_quantity = 0
         self._generation_timer = 0.0
         
+        self.owner_faction_id: Optional[int] = None  # None = wild/neutral
+
         # --- Attributes for task-based claiming ---
         self.claimed_by_task_id: Optional[uuid.UUID] = None
         self.claimed_by_agent_id: Optional[uuid.UUID] = None

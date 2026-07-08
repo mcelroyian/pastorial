@@ -74,6 +74,7 @@ class Agent:
         self.resource_priorities: Optional[List[ResourceType]] = resource_priorities
 
         self.needs: Needs = Needs()
+        self.owner_faction_id: Optional[int] = None  # set by Simulation at spawn
 
         # Initialize the first behavior after all attributes are set
         self.current_behavior.enter()

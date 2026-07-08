@@ -190,7 +190,9 @@ class GatherAndDeliverTask(Task):
         self._update_timestamp()
         self.status = TaskStatus.PREPARING
 
-        # 1. Claim a resource node
+        faction_id = getattr(agent, 'owner_faction_id', None)
+
+        # 1. Claim a resource node (wild nodes are fair game for any faction)
         for node in sorted(
             resource_manager.get_nodes_by_type(self.resource_type_to_gather),
             key=lambda n: (n.position - agent.position).length_squared(),
@@ -211,11 +213,12 @@ class GatherAndDeliverTask(Task):
             self.target_resource_node_ref.current_quantity,
         )
 
-        # 2. Reserve space at dropoff
-        for dropoff in sorted(
-            resource_manager.storage_points + resource_manager.processing_stations,
-            key=lambda d: (d.position - agent.position).length_squared(),
-        ):
+        # 2. Reserve space at dropoff — own-faction storage/stations only
+        own_dropoffs = [
+            d for d in resource_manager.storage_points + resource_manager.processing_stations
+            if getattr(d, 'owner_faction_id', None) is None or getattr(d, 'owner_faction_id', None) == faction_id
+        ]
+        for dropoff in sorted(own_dropoffs, key=lambda d: (d.position - agent.position).length_squared()):
             if hasattr(dropoff, 'can_accept_input') and dropoff.can_accept_input(
                 self.resource_type_to_gather, 1
             ):
@@ -223,7 +226,8 @@ class GatherAndDeliverTask(Task):
                 self.reserved_at_dropoff_quantity = qty
                 break
             elif hasattr(dropoff, 'reserve_space'):
-                reserved = dropoff.reserve_space(self.task_id, self.resource_type_to_gather, qty)
+                reserved = dropoff.reserve_space(self.task_id, self.resource_type_to_gather, qty,
+                                                  faction_id=faction_id)
                 if reserved > 0:
                     self.target_dropoff_ref = dropoff
                     self.reserved_at_dropoff_quantity = reserved
@@ -378,6 +382,8 @@ class DeliverWheatToMillTask(Task):
         self._update_timestamp()
         self.status = TaskStatus.PREPARING
 
+        faction_id = getattr(agent, 'owner_faction_id', None)
+
         if agent.current_inventory['quantity'] > 0:
             self.error_message = "Agent inventory not empty."
             self.status = TaskStatus.FAILED
@@ -388,12 +394,14 @@ class DeliverWheatToMillTask(Task):
             agent.inventory_capacity,
         )
 
-        # 1. Reserve wheat at a storage point
+        # 1. Reserve wheat at own-faction storage
+        own_storage = resource_manager.storage_points_for(faction_id)
         for sp in sorted(
-            [s for s in resource_manager.storage_points if s.has_resource(self.resource_to_retrieve, 1)],
+            [s for s in own_storage if s.has_resource(self.resource_to_retrieve, 1)],
             key=lambda s: (s.position - agent.position).length_squared(),
         ):
-            reserved = sp.reserve_for_pickup(self.task_id, self.resource_to_retrieve, qty_to_reserve)
+            reserved = sp.reserve_for_pickup(self.task_id, self.resource_to_retrieve, qty_to_reserve,
+                                              faction_id=faction_id)
             if reserved > 0:
                 self.target_storage_ref = sp
                 self.reserved_at_storage_for_pickup_quantity = reserved
@@ -404,9 +412,10 @@ class DeliverWheatToMillTask(Task):
             self.status = TaskStatus.FAILED
             return False
 
-        # 2. Find a mill that can accept wheat
+        # 2. Find own-faction mill that can accept wheat
+        own_stations = resource_manager.stations_for(faction_id)
         mills = sorted(
-            [p for p in resource_manager.processing_stations
+            [p for p in own_stations
              if isinstance(p, Mill) and p.can_accept_input(self.resource_to_retrieve, 1)],
             key=lambda p: (p.position - self.target_storage_ref.position).length_squared(),
         )
@@ -582,13 +591,14 @@ class EatTask(Task):
         self._update_timestamp()
         self.status = TaskStatus.PREPARING
 
+        faction_id = getattr(agent, 'owner_faction_id', None)
+        own_storage = resource_manager.storage_points_for(faction_id)
         candidates = sorted(
-            [sp for sp in resource_manager.storage_points
-             if sp.has_resource(ResourceType.BREAD, 1)],
+            [sp for sp in own_storage if sp.has_resource(ResourceType.BREAD, 1)],
             key=lambda sp: (sp.position - agent.position).length_squared(),
         )
         for sp in candidates:
-            reserved = sp.reserve_for_pickup(self.task_id, ResourceType.BREAD, 1)
+            reserved = sp.reserve_for_pickup(self.task_id, ResourceType.BREAD, 1, faction_id=faction_id)
             if reserved > 0:
                 self.target_storage_ref = sp
                 self._reserved_quantity = reserved

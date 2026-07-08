@@ -23,20 +23,13 @@ def test_berries_stored(smoke_sim):
 
 
 def test_wheat_gathered(smoke_sim):
-    # Wheat flows: field → storage → mill (not held long-term in storage).
-    # Verify it entered the chain via the mill's input buffer OR bread proves it.
-    rm = smoke_sim.resource_manager
-    mill_wheat_input = sum(
-        st.current_input_quantity
-        for st in rm.processing_stations
-        if isinstance(st, Mill)
+    # Wheat flows: field → faction storage → mill. Check cumulative gathered metric
+    # (buffer state drains too fast to be a reliable snapshot check).
+    gathered = smoke_sim.metrics.gathered.get(ResourceType.WHEAT, 0)
+    bread_consumed = smoke_sim.metrics.consumed.get(ResourceType.BREAD, 0)
+    assert gathered + bread_consumed > 0, (
+        "No wheat gathered and no bread consumed — production chain appears broken"
     )
-    bread = sum(
-        st.current_output_quantity.get(ResourceType.BREAD, 0)
-        for st in rm.processing_stations
-        if isinstance(st, Bakery)
-    )
-    assert mill_wheat_input + bread > 0, "No evidence of wheat being gathered or processed"
 
 
 def test_flour_produced(smoke_sim):

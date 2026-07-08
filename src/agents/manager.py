@@ -36,8 +36,9 @@ class AgentManager:
     def create_agent(self,
                      position: pygame.math.Vector2,
                      speed: float,
-                     inventory_capacity: int = 5, # Default value from plan/previous code
-                     resource_priorities: List[ResourceType] = None # Default to None or sensible default
+                     inventory_capacity: int = 5,
+                     resource_priorities: List[ResourceType] = None,
+                     faction_id: Optional[int] = None,
                      ) -> Agent:
         """
         Creates a new Agent, adds it to the manager, and returns it.
@@ -70,12 +71,13 @@ class AgentManager:
             position=position,
             speed=speed,
             grid=self.grid,
-            task_manager=self.task_manager_ref, # Pass the TaskManager reference
+            task_manager=self.task_manager_ref,
             inventory_capacity=inventory_capacity,
             resource_priorities=resource_priorities
         )
+        new_agent.owner_faction_id = faction_id
         self.add_agent(new_agent)
-        self.logger.info(f"Created agent {agent_name} ({agent_id}) at {position}")
+        self.logger.info(f"Created agent {agent_name} ({agent_id}) at {position} faction={faction_id}")
         return new_agent
 
     def update_agents(self, dt: float, resource_manager, metrics=None) -> None:
@@ -91,13 +93,14 @@ class AgentManager:
     def _remove_dead_agent(self, agent, resource_manager, metrics=None) -> None:
         self.logger.warning(f"Agent {agent.name} ({agent.id}) starved to death.")
         if metrics is not None:
-            metrics.record("agent_death", agent_name=agent.name)
+            metrics.record("agent_death", agent_name=agent.name, faction_id=agent.owner_faction_id)
 
-        # Release current task claims and re-post to job board
-        current_task = self.task_manager_ref.assigned_tasks.get(agent.id)
+        # Release current task claims and re-post to job board (use agent's own TM)
+        agent_tm = getattr(agent, 'task_manager_ref', self.task_manager_ref)
+        current_task = agent_tm.assigned_tasks.get(agent.id)
         if current_task is not None:
             current_task.cleanup(agent, resource_manager, success=False)
-            self.task_manager_ref.report_task_outcome(current_task, TaskStatus.FAILED, agent)
+            agent_tm.report_task_outcome(current_task, TaskStatus.FAILED, agent)
 
         # Drop carried inventory (log and discard; no item-on-ground yet)
         qty = agent.current_inventory.get('quantity', 0)

@@ -90,17 +90,22 @@ class ResourceManager:
         """
         from .processing import MultiInputProcessingStation
 
-        # Mill → Bakery (single-output → multi-input)
+        # Mill → Bakery (single-output → multi-input, same faction)
         for source in self.processing_stations:
             if isinstance(source, MultiInputProcessingStation):
                 continue
             if source.current_output_quantity < 1.0:
                 continue
             output_type = source.produced_output_type
+            source_faction = getattr(source, 'owner_faction_id', None)
             for sink in self.processing_stations:
                 if sink is source or not isinstance(sink, MultiInputProcessingStation):
                     continue
                 if output_type not in sink.recipe.inputs:
+                    continue
+                # Only route to same-faction sinks (or if either is unowned)
+                sink_faction = getattr(sink, 'owner_faction_id', None)
+                if source_faction is not None and sink_faction is not None and source_faction != sink_faction:
                     continue
                 space = sink.input_capacity - sink.current_input_quantity.get(output_type, 0.0)
                 transfer = min(source.current_output_quantity, max(0.0, space))
@@ -110,18 +115,24 @@ class ResourceManager:
                         sink.current_input_quantity.get(output_type, 0.0) + transfer
                     )
                     if metrics is not None:
-                        metrics.record("produced", resource_type=output_type, quantity=int(transfer))
+                        metrics.record("produced", resource_type=output_type, quantity=int(transfer),
+                                       faction_id=source_faction)
                 break
 
-        # Bakery → storage points (multi-output → storage)
+        # Bakery → storage points (multi-output → storage, same faction)
         for source in self.processing_stations:
             if not isinstance(source, MultiInputProcessingStation):
                 continue
+            source_faction = getattr(source, 'owner_faction_id', None)
             for output_type, qty in source.current_output_quantity.items():
                 if qty < 1.0:
                     continue
                 for sp in self.storage_points:
                     if sp.accepted_resource_types and output_type not in sp.accepted_resource_types:
+                        continue
+                    # Only push to same-faction storage (or if either is unowned)
+                    sp_faction = getattr(sp, 'owner_faction_id', None)
+                    if source_faction is not None and sp_faction is not None and source_faction != sp_faction:
                         continue
                     space = sp.overall_capacity - sp.get_current_load() - sp.get_total_reserved_quantity()
                     transfer = int(min(qty, max(0, space)))
@@ -129,7 +140,8 @@ class ResourceManager:
                         source.current_output_quantity[output_type] -= transfer
                         sp.stored_resources[output_type] = sp.stored_resources.get(output_type, 0) + transfer
                         if metrics is not None:
-                            metrics.record("produced", resource_type=output_type, quantity=transfer)
+                            metrics.record("produced", resource_type=output_type, quantity=transfer,
+                                           faction_id=source_faction)
                     break
 
     def draw_nodes(self, surface: pygame.Surface, font: pygame.font.Font, grid): # Add grid parameter
@@ -183,6 +195,28 @@ class ResourceManager:
             s for s in self.processing_stations
             if s.produced_output_type == resource_type and s.has_output()
         ]
+    def get_faction_resource_quantity(self, faction_id: Optional[int], resource_type: ResourceType) -> int:
+        """Total quantity of a resource across storage points owned by a specific faction."""
+        if faction_id is None:
+            return self.get_global_resource_quantity(resource_type)
+        return sum(
+            sp.stored_resources.get(resource_type, 0)
+            for sp in self.storage_points
+            if sp.owner_faction_id == faction_id
+        )
+
+    def storage_points_for(self, faction_id: Optional[int]):
+        """Storage points owned by faction_id (or all if faction_id is None)."""
+        if faction_id is None:
+            return self.storage_points
+        return [sp for sp in self.storage_points if sp.owner_faction_id == faction_id]
+
+    def stations_for(self, faction_id: Optional[int]):
+        """Processing stations owned by faction_id (or all if faction_id is None)."""
+        if faction_id is None:
+            return self.processing_stations
+        return [s for s in self.processing_stations if getattr(s, 'owner_faction_id', None) == faction_id]
+
     def get_global_resource_quantity(self, resource_type: ResourceType) -> int:
         """
         Calculates the total quantity of a specific resource type across all storage points.

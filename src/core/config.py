@@ -2,6 +2,21 @@
 
 from ..resources.resource_types import ResourceType # Import for RESOURCE_VISUAL_COLORS
 
+# Faction settings
+NUM_FACTIONS = 2
+FACTION_CONFIGS = [
+    {"name": "Redwood", "color": (210, 60, 60)},   # faction 0 — west, red
+    {"name": "Ashford", "color": (60, 110, 210)},   # faction 1 — east, blue
+]
+PER_FACTION_AGENTS = 3
+PER_FACTION_MILLS = 1
+PER_FACTION_BAKERIES = 1
+PER_FACTION_WELLS = 1
+PER_FACTION_INITIAL_BREAD = 12  # pre-seeded bread per faction (=4 per agent)
+WILD_BERRY_BUSHES = 15          # shared wild nodes — deliberately not scaled with faction count
+WILD_WHEAT_FIELDS = 15
+WILD_BEEHIVES = 1
+
 # Screen dimensions
 SCREEN_WIDTH = 1280
 SCREEN_HEIGHT = 720

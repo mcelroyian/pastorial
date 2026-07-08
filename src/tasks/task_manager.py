@@ -26,6 +26,7 @@ class TaskManager:
         self.failed_tasks: List[Task] = []
 
         self.resource_manager_ref: 'ResourceManager' = resource_manager
+        self.faction_id: Optional[int] = None  # set by Simulation; scopes stock queries
         self.metrics = None  # set by Simulation after construction
         self.logger = logging.getLogger(__name__)
 
@@ -323,6 +324,12 @@ class TaskManager:
         # TODO: Check for tasks that are assigned but stuck (e.g., agent died, task timed out)
         # This would involve iterating self.assigned_tasks and checking task.last_update_time
 
+    def _stock(self, resource_type: ResourceType) -> int:
+        """Return faction-scoped (or global) stock for a resource type."""
+        if self.faction_id is not None:
+            return self.resource_manager_ref.get_faction_resource_quantity(self.faction_id, resource_type)
+        return self.resource_manager_ref.get_global_resource_quantity(resource_type)
+
     def _generate_tasks_if_needed(self):
         """
         Generates tasks based on simulation state, e.g., low resource stock.
@@ -330,7 +337,7 @@ class TaskManager:
         """
         self.logger.debug(f"TaskManager: _generate_tasks_if_needed CALLED. Pending: {len(self.pending_tasks)}, Assigned: {len(self.assigned_tasks)}")
         # --- Berry Task Generation ---
-        current_berry_stock = self.resource_manager_ref.get_global_resource_quantity(ResourceType.BERRY)
+        current_berry_stock = self._stock(ResourceType.BERRY)
         
         # print(f"DEBUG TaskManager: Current global berry stock: {current_berry_stock}, Min Level: {config.MIN_BERRY_STOCK_LEVEL}") # Debug
 
@@ -360,7 +367,7 @@ class TaskManager:
             # self.logger.debug(f"TaskManager: Berry stock ({current_berry_stock}) is sufficient. No new berry task needed.")
 
 # --- Wheat Task Generation ---
-        current_wheat_stock = self.resource_manager_ref.get_global_resource_quantity(ResourceType.WHEAT)
+        current_wheat_stock = self._stock(ResourceType.WHEAT)
         
         # self.logger.debug(f"TaskManager: Current global wheat stock: {current_wheat_stock}, Min Level: {config.MIN_WHEAT_STOCK_LEVEL}")
 
@@ -391,19 +398,20 @@ class TaskManager:
         # --- Flour (from Wheat) Task Generation ---
         # This task involves an agent picking up Wheat from storage and delivering it to a Mill.
         min_flour_stock_config = getattr(config, 'MIN_FLOUR_STOCK_LEVEL', 20)
-        current_flour_stock = self.resource_manager_ref.get_global_resource_quantity(ResourceType.FLOUR_POWDER)
+        current_flour_stock = self._stock(ResourceType.FLOUR_POWDER)
         self.logger.debug(f"FLOUR_TASK: Current Flour: {current_flour_stock}, Min Required: {min_flour_stock_config}")
 
         if current_flour_stock < min_flour_stock_config:
             self.logger.debug(f"FLOUR_TASK: Flour stock is LOW ({current_flour_stock} < {min_flour_stock_config}). Proceeding with checks.")
             
             process_wheat_qty_config = getattr(config, 'PROCESS_WHEAT_TASK_QUANTITY', 10)
-            wheat_in_storage = self.resource_manager_ref.get_global_resource_quantity(ResourceType.WHEAT)
+            wheat_in_storage = self._stock(ResourceType.WHEAT)
             self.logger.debug(f"FLOUR_TASK: Wheat in storage: {wheat_in_storage}, Required for task: {process_wheat_qty_config}")
             
             mill_can_accept = False
-            self.logger.debug(f"FLOUR_TASK: Checking Mills... Total stations: {len(self.resource_manager_ref.processing_stations)}")
-            for i, station in enumerate(self.resource_manager_ref.processing_stations):
+            faction_stations = self.resource_manager_ref.stations_for(self.faction_id)
+            self.logger.debug(f"FLOUR_TASK: Checking Mills... Total stations: {len(faction_stations)}")
+            for i, station in enumerate(faction_stations):
                 is_mill_instance = isinstance(station, Mill)
                 can_accept_input = False
                 if is_mill_instance:
@@ -442,7 +450,7 @@ class TaskManager:
             self.logger.debug(f"FLOUR_TASK: Flour stock ({current_flour_stock}) is sufficient (>= {min_flour_stock_config}). No new DeliverWheatToMill task needed.")
 
         # --- Recipe-based Task Generation ---
-        for station in self.resource_manager_ref.processing_stations:
+        for station in self.resource_manager_ref.stations_for(self.faction_id):
             if isinstance(station, MultiInputProcessingStation):
                 for resource_type, required_qty in station.recipe.inputs.items():
                     # Quick fix: Don't generate gather tasks for flour, it's handled by stock levels

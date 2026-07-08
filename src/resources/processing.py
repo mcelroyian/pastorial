@@ -58,6 +58,8 @@ class ProcessingStation:
         self.is_processing = False
         self.processing_progress = 0  # Ticks accumulated towards current processing cycle
 
+        self.owner_faction_id: Optional[int] = None  # None = neutral/wild
+
         # For drawing (subclasses should define specific colors/sprites)
         self.color = (100, 100, 100) # Default grey
         self.processing_color = (150, 150, 50) # Yellowish when processing
