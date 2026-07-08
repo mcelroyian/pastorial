@@ -47,7 +47,7 @@ class Simulation:
 
     def update(self, dt: float, manual_mode: bool = False):
         self.sim_time += dt
-        self.resource_manager.update_nodes(dt)
+        self.resource_manager.update_nodes(dt, metrics=self.metrics)
         self.task_manager.update(dt, manual_mode, self.sim_time)
         self.agent_manager.update_agents(dt, self.resource_manager, self.metrics)
         self.metrics.update(self.sim_time, self.resource_manager, self.agent_manager)

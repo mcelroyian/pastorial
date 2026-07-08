@@ -73,14 +73,14 @@ class ResourceManager:
         """
         return [node for node in self.nodes if hasattr(node, 'resource_type') and node.resource_type == resource_type]
 
-    def update_nodes(self, dt: float):
+    def update_nodes(self, dt: float, metrics=None):
         for node in self.nodes:
             node.update(dt)
         for station in self.processing_stations:
             station.tick()
-        self._auto_distribute_outputs()
+        self._auto_distribute_outputs(metrics=metrics)
 
-    def _auto_distribute_outputs(self):
+    def _auto_distribute_outputs(self, metrics=None):
         """Route processing station output buffers to downstream sinks each tick.
 
         - Single-output stations (Mill) → multi-input stations (Bakery) that accept that type.
@@ -109,6 +109,8 @@ class ResourceManager:
                     sink.current_input_quantity[output_type] = (
                         sink.current_input_quantity.get(output_type, 0.0) + transfer
                     )
+                    if metrics is not None:
+                        metrics.record("produced", resource_type=output_type, quantity=int(transfer))
                 break
 
         # Bakery → storage points (multi-output → storage)
@@ -126,6 +128,8 @@ class ResourceManager:
                     if transfer >= 1:
                         source.current_output_quantity[output_type] -= transfer
                         sp.stored_resources[output_type] = sp.stored_resources.get(output_type, 0) + transfer
+                        if metrics is not None:
+                            metrics.record("produced", resource_type=output_type, quantity=transfer)
                     break
 
     def draw_nodes(self, surface: pygame.Surface, font: pygame.font.Font, grid): # Add grid parameter

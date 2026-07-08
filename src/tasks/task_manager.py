@@ -244,9 +244,15 @@ class TaskManager:
                     # task.prepare() should have submitted an intent to the agent.
                     return True # Task assigned and preparation started
                 else:
-                    self.logger.warning(f"TaskManager: Task {claimed_task.task_id} FAILED preparation for agent {agent.id}. Error: {claimed_task.error_message}")
-                    # report_task_outcome will handle moving it from assigned_tasks and re-posting/failing it.
-                    self.report_task_outcome(claimed_task, TaskStatus.FAILED, agent)
+                    # Re-post without calling report_task_outcome: prepare() failed before any
+                    # work started, so this isn't a real execution failure. Avoids metric
+                    # inflation and the rapid fail→re-post→claim loop (~50 Hz without this).
+                    self.logger.debug(f"TaskManager: Task {claimed_task.task_id} ({claimed_task.task_type.name}) failed prepare(); re-posting. Reason: {claimed_task.error_message}")
+                    del self.assigned_tasks[agent.id]
+                    claimed_task.status = TaskStatus.PENDING
+                    claimed_task.agent_id = None
+                    claimed_task.error_message = None
+                    self.add_task(claimed_task)
                     # Continue to check for other tasks for this agent in this cycle
             
             except ValueError: # If task was already removed from pending_tasks

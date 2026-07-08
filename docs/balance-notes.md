@@ -38,3 +38,7 @@ Water gathered: 4
 **`_auto_distribute_outputs` extended**: Bakery output bread is auto-pushed to bread storage every tick. Without this, bread sat in the bakery's `current_output_quantity` dict and was invisible to EatTask searches.
 
 **`GatherAndDeliverTask.cleanup` guard**: Processing stations (Bakery) don't implement `release_reservation`. The cleanup guard (`hasattr(..., 'release_reservation')`) prevents crashes when water-delivery tasks are abandoned.
+
+## Balance levers for Phase 4
+
+To induce scarcity (trigger raiding): raise `BAKERY_PROCESSING_SPEED`, reduce `INITIAL_BAKERIES` to 0, or increase `INITIAL_AGENTS`. The current equilibrium sits near the comfortable edge so Phase 4 only needs a small perturbation to make food a contested resource.
