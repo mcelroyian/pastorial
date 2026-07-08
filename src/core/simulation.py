@@ -156,8 +156,12 @@ class Simulation:
             third = grid_w // 3
             wild_bounds = pygame.Rect(third, 0, grid_w - 2 * third, grid_h)
 
-        berry_count = getattr(self.scenario, 'wild_berry_bushes', config.WILD_BERRY_BUSHES) if self.scenario else config.WILD_BERRY_BUSHES
-        wheat_count = getattr(self.scenario, 'wild_wheat_fields', config.WILD_WHEAT_FIELDS) if self.scenario else config.WILD_WHEAT_FIELDS
+        def _scen(attr, default):
+            v = getattr(self.scenario, attr, None) if self.scenario else None
+            return v if v is not None else default
+
+        berry_count = _scen('wild_berry_bushes', config.WILD_BERRY_BUSHES)
+        wheat_count = _scen('wild_wheat_fields', config.WILD_WHEAT_FIELDS)
 
         self._spawn_entity(BerryBush, berry_count, bounds=wild_bounds)   # owner_faction_id stays None
         self._spawn_entity(WheatField, wheat_count, bounds=wild_bounds)
@@ -236,7 +240,8 @@ class Simulation:
         for faction in self.factions:
             fid = faction.faction_id
             region = faction.home_region
-            per_faction = getattr(self.scenario, 'per_faction_agents', config.PER_FACTION_AGENTS) if self.scenario else config.PER_FACTION_AGENTS
+            per_faction_sc = getattr(self.scenario, 'per_faction_agents', None) if self.scenario else None
+            per_faction = per_faction_sc if per_faction_sc is not None else config.PER_FACTION_AGENTS
 
             spawned = 0
             attempts = 0

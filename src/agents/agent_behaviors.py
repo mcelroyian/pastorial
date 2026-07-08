@@ -239,7 +239,8 @@ class PathFailedBehavior(AgentBehavior):
             self.agent.logger.info(f"Agent {self.agent.id} PathFailed: Attempting retry {self.retry_count}/{self.agent.config.PATHFINDING_MAX_RETRIES} for intent {self.failed_intent.intent_id}.")
 
             # Attempt to find a path again
-            path = self.agent.grid.find_path(self.agent.position, self.failed_intent.target_position) # type: ignore
+            from src.pathfinding.astar import find_path
+            path = find_path(self.agent.position, self.failed_intent.target_position, self.agent.grid)
 
             if path:
                 self.agent.logger.info(f"Agent {self.agent.id} PathFailed: Retry successful. Path found. Transitioning to MovingBehavior.")
