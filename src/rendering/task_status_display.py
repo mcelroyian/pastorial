@@ -16,7 +16,8 @@ class TaskStatusDisplay:
                  font: pygame.font.Font,
                  panel_rect: pygame.Rect,
                  screen_surface: pygame.Surface,
-                 config_module: 'config'): # Pass config module for colors etc.
+                 config_module: 'config', # Pass config module for colors etc.
+                 events=None): # Optional[EventLog] — sim-wide, not faction-scoped (Plan 4 Task 2)
         """
         Initializes the TaskStatusDisplay.
 
@@ -26,12 +27,14 @@ class TaskStatusDisplay:
             panel_rect: Rect defining the panel's position and dimensions.
             screen_surface: The main screen surface to blit onto.
             config_module: The game's configuration module.
+            events: Optional sim-wide EventLog, rendered as a "Recent Events" section.
         """
         self.task_manager_ref = task_manager
         self.font = font
         self.panel_rect = panel_rect
         self.screen_surface = screen_surface
         self.config = config_module
+        self.events_ref = events
 
         self.panel_surface = pygame.Surface(self.panel_rect.size, pygame.SRCALPHA)
         # Assuming self.config.COLOR_BLACK is (R, G, B)
@@ -187,6 +190,21 @@ class TaskStatusDisplay:
             if current_y > self.panel_rect.height - self.padding: # Stop if panel is full
                  break
         current_y += self.padding
+
+        # Section: Recent Events (Plan 4 Task 2 — sim-wide, not faction-scoped like above)
+        if self.events_ref is not None:
+            recent_events = self.events_ref.recent(5)
+            header_text_events = f"Recent Events ({len(recent_events)})"
+            self._draw_text(self.panel_surface, header_text_events, (self.padding, current_y), self.header_color, self.font)
+            current_y += self.line_height + self.padding // 2
+            for ev in recent_events:
+                pos_text = f"({ev.position.x:.0f},{ev.position.y:.0f})" if ev.position else "?"
+                line = f"T={ev.sim_time:.0f}s {ev.event_type}: F{ev.faction_id} vs F{ev.other_faction_id} @ {pos_text}"
+                self._draw_text(self.panel_surface, line, (self.padding, current_y), self.text_color, self.font)
+                current_y += self.line_height
+                if current_y > self.panel_rect.height - self.padding:
+                    break
+            current_y += self.padding
 
         # Blit the panel surface to the main screen
         self.screen_surface.blit(self.panel_surface, self.panel_rect.topleft)

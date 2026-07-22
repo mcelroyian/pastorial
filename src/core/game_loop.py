@@ -52,6 +52,7 @@ class GameLoop:
             panel_rect=task_panel_rect,
             screen_surface=self.screen,
             config_module=config,
+            events=self.sim.events,
         )
         self.inspector_display = InspectorDisplay(surface=self.screen, font=self.ui_font)
 

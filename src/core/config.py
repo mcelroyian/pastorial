@@ -125,6 +125,13 @@ UTILITY_BASE_VALUE_PROVISION = 100.0    # replaces PROVISION_TASK_PRIORITY (stat
 UTILITY_DISTANCE_WEIGHT = 1.0           # multiplies raw grid-unit distance into a score cost
 UTILITY_CONSUMPTION_WINDOW_SECONDS = 60.0  # rolling window for SimMetrics recent-rate queries
 FOOD_DEFICIT_SECONDS_CAP = 1e6          # sentinel for "abundant" when consumption rate is ~0
+UTILITY_CONTENTION_WEIGHT = 2.0         # multiplies a node's contention_pressure into distance_cost
+
+# --- CONTENTION (Plan 4 Task 2 — contested wild resources) ---
+CONTENTION_BUMP_PER_DENIAL = 8.0        # added to a node's pressure on each cross-faction claim denial
+CONTENTION_PRESSURE_CAP = 40.0          # ceiling; ~5 rapid denials saturate a node
+CONTENTION_DECAY_RATE = 1.0             # pressure units/sec removed every tick (full decay from cap: 40s)
+EVENT_LOG_MAX_SIZE = 500                # ring-buffer size for src/core/events.py
 
 # Agent Action Timings (continued)
 DEFAULT_COLLECTION_TIME_FROM_STORAGE = 1.5 # Seconds to collect from a storage point

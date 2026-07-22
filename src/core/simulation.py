@@ -19,6 +19,7 @@ from src.resources.resource_types import ResourceType
 from src.agents.manager import AgentManager
 from src.tasks.task_manager import TaskManager
 from src.core.metrics import SimMetrics
+from src.core.events import EventLog
 from src.factions.faction import Faction
 
 
@@ -34,11 +35,13 @@ class Simulation:
 
         self.sim_time: float = 0.0
         self.metrics: SimMetrics = SimMetrics()
+        self.events: EventLog = EventLog()
         self.logger = logging.getLogger(__name__)
         self.scenario = scenario  # optional config-override dataclass
 
         self.grid = Grid()
         self.resource_manager = ResourceManager()
+        self.resource_manager.events = self.events  # duck-typed, mirrors tm.metrics wiring
         self.factions: List[Faction] = []
 
         self._build_factions()
@@ -296,6 +299,7 @@ class Simulation:
 
     def update(self, dt: float, manual_mode: bool = False):
         self.sim_time += dt
+        self.events.update(self.sim_time)
         self.resource_manager.update_nodes(dt, metrics=self.metrics)
         for faction in self.factions:
             faction.task_manager.update(dt, manual_mode, self.sim_time)

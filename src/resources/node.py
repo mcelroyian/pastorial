@@ -4,6 +4,7 @@ import logging
 from typing import Optional # For Optional type hints
 from abc import ABC, abstractmethod
 from ..resources.resource_types import ResourceType # Import ResourceType
+from ..core import config
 
 class ResourceNode(ABC):
     """
@@ -36,6 +37,11 @@ class ResourceNode(ABC):
         # --- Attributes for task-based claiming ---
         self.claimed_by_task_id: Optional[uuid.UUID] = None
         self.claimed_by_agent_id: Optional[uuid.UUID] = None
+        self.claimed_by_faction_id: Optional[int] = None
+
+        # Decaying contention accumulator (Plan 4 Task 2) — bumped on cross-faction claim
+        # denial, decayed every tick in update(). Feeds GatherAndDeliverTask.compute_score.
+        self.contention_pressure: float = 0.0
 
     def update(self, dt: float):
         """
@@ -44,6 +50,11 @@ class ResourceNode(ABC):
         Args:
             dt: The time elapsed since the last update in seconds.
         """
+        if self.contention_pressure > 0.0:
+            self.contention_pressure = max(
+                0.0, self.contention_pressure - config.CONTENTION_DECAY_RATE * dt
+            )
+
         if self.current_quantity < self.capacity:
             self._generation_timer += dt
             resources_to_add = int(self._generation_timer / self.generation_interval)
@@ -57,7 +68,8 @@ class ResourceNode(ABC):
                     self.logger.debug(f"Node {self.id} at {self.position} ({self.resource_type.name}) regenerated {actual_to_add}. New quantity: {self.current_quantity}/{self.capacity}")
 
     # --- Methods for task-based claiming ---
-    def claim(self, agent_id: uuid.UUID, task_id: uuid.UUID) -> bool:
+    def claim(self, agent_id: uuid.UUID, task_id: uuid.UUID,
+              faction_id: Optional[int] = None) -> bool:
         """
         Attempts to claim this resource node for a specific task and agent.
         Returns True if successful (node was not already claimed), False otherwise.
@@ -65,6 +77,7 @@ class ResourceNode(ABC):
         if self.claimed_by_task_id is None:
             self.claimed_by_task_id = task_id
             self.claimed_by_agent_id = agent_id
+            self.claimed_by_faction_id = faction_id
             self.logger.debug(f"Node {self.position} claimed by task {task_id} for agent {agent_id}.")
             return True
         self.logger.debug(f"Node {self.position} FAILED to claim by task {task_id} (already claimed by task {self.claimed_by_task_id}).")
@@ -79,9 +92,16 @@ class ResourceNode(ABC):
             # if self.claimed_by_agent_id == agent_id:
             self.claimed_by_task_id = None
             self.claimed_by_agent_id = None
+            self.claimed_by_faction_id = None
             self.logger.debug(f"Node {self.position} released by task {task_id} from agent {agent_id}.")
         else:
             self.logger.debug(f"Node {self.position} release called by task {task_id} but was claimed by {self.claimed_by_task_id} (or not claimed).")
+
+    def add_contention(self, amount: float) -> None:
+        """Bump this node's contention pressure (capped). Plan 4 Task 2."""
+        self.contention_pressure = min(
+            config.CONTENTION_PRESSURE_CAP, self.contention_pressure + amount
+        )
 
     @abstractmethod
     def draw(self, surface: pygame.Surface, font: pygame.font.Font, grid):

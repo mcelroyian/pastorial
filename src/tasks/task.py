@@ -30,14 +30,24 @@ _GATHER_SCORE_PARAMS = {
 }
 
 
-def _nearest_distance_cost(home_centroid, positions, weight: float) -> float:
+def _nearest_distance_cost(home_centroid, positions_and_pressure, weight: float,
+                            contention_weight: float = 0.0) -> float:
     """Coarse generation-time distance approximation: no agent is assigned to a task yet at
-    scoring time, so use the faction's home-region centroid as a stand-in anchor. Task 2's
-    contention-aware distance scoring replaces this once real claim/contention data exists."""
-    if not positions:
+    scoring time, so use the faction's home-region centroid as a stand-in anchor.
+
+    positions_and_pressure is an iterable of (position, contention_pressure) pairs; pressure
+    is 0.0 for anything that can't be contested (e.g. mills — contention_weight defaults to
+    0.0 so those call sites are unaffected). Picking the min over distance+contention combined
+    means a contested-but-close candidate can lose to a farther-but-uncontested one — this is
+    "nodes in contested areas score slightly lower, remote/safe nodes gain" (Plan 4 Task 2),
+    with no separate boost-safe-nodes logic needed."""
+    positions_and_pressure = list(positions_and_pressure)
+    if not positions_and_pressure:
         return 0.0
-    nearest = min((p - home_centroid).length() for p in positions)
-    return weight * nearest
+    return min(
+        weight * (p - home_centroid).length() + contention_weight * pressure
+        for p, pressure in positions_and_pressure
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -223,14 +233,35 @@ class GatherAndDeliverTask(Task):
         faction_id = getattr(agent, 'owner_faction_id', None)
 
         # 1. Claim a resource node (wild nodes are fair game for any faction)
+        events = getattr(resource_manager, 'events', None)
+        checked_preferred_candidate = False
         for node in sorted(
             resource_manager.get_nodes_by_type(self.resource_type_to_gather),
             key=lambda n: (n.position - agent.position).length_squared(),
         ):
-            if node.current_quantity >= 1 and node.claim(agent.id, self.task_id):
+            if node.current_quantity < 1:
+                continue
+            if node.claim(agent.id, self.task_id, faction_id=faction_id):
                 self.target_resource_node_ref = node
                 self.reserved_at_node = True
                 break
+            # Only the agent's nearest viable candidate counts as a contention signal — "my
+            # preferred spot was taken by the enemy." Falling through to a second-choice node
+            # further down the sorted list is normal, not a hostility precursor (Plan 4 Task 2).
+            if not checked_preferred_candidate:
+                checked_preferred_candidate = True
+                if (node.claimed_by_faction_id is not None
+                        and faction_id is not None
+                        and node.claimed_by_faction_id != faction_id):
+                    node.add_contention(config.CONTENTION_BUMP_PER_DENIAL)
+                    if events is not None:
+                        events.record(
+                            "claim_contention",
+                            faction_id=faction_id,
+                            other_faction_id=node.claimed_by_faction_id,
+                            position=node.position,
+                            resource_type=self.resource_type_to_gather.name,
+                        )
 
         if not self.target_resource_node_ref:
             self.error_message = f"No available node for {self.resource_type_to_gather.name}."
@@ -369,9 +400,13 @@ class GatherAndDeliverTask(Task):
             # task only exists because a station needs it — so score at flat urgency.
             base_value, stock_ratio = config.UTILITY_BASE_VALUE_PROVISION, 0.0
         urgency = max(0.0, 1.0 - stock_ratio) ** config.UTILITY_URGENCY_EXPONENT
-        positions = [n.position for n in resource_manager.get_nodes_by_type(rt)]
-        distance_cost = _nearest_distance_cost(faction_ctx.home_centroid, positions,
-                                                config.UTILITY_DISTANCE_WEIGHT)
+        nodes_and_pressure = [
+            (n.position, n.contention_pressure) for n in resource_manager.get_nodes_by_type(rt)
+        ]
+        distance_cost = _nearest_distance_cost(
+            faction_ctx.home_centroid, nodes_and_pressure,
+            config.UTILITY_DISTANCE_WEIGHT, config.UTILITY_CONTENTION_WEIGHT,
+        )
         risk_cost = 0.0  # Task 1: no hostility exists yet. Task 3/4 wire real risk here.
         return base_value * urgency - distance_cost - risk_cost
 
@@ -576,9 +611,9 @@ class DeliverWheatToMillTask(Task):
         urgency = max(0.0, 1.0 - stock_ratio) ** config.UTILITY_URGENCY_EXPONENT
         from ..resources.mill import Mill
         positions = [
-            s.position for s in resource_manager.stations_for(faction_ctx.faction_id)
+            (s.position, 0.0) for s in resource_manager.stations_for(faction_ctx.faction_id)
             if isinstance(s, Mill)
-        ]
+        ]  # mills are always own-faction, never contested — contention_weight stays at default 0.0
         distance_cost = _nearest_distance_cost(faction_ctx.home_centroid, positions,
                                                 config.UTILITY_DISTANCE_WEIGHT)
         risk_cost = 0.0  # Task 1: no hostility exists yet. Task 3/4 wire real risk here.
