@@ -111,6 +111,21 @@ PROCESS_WHEAT_TASK_QUANTITY = 10 # Amount of Wheat to retrieve from storage for 
 PROCESS_WHEAT_TASK_PRIORITY = 75 # Higher than basic gathering
 MAX_ACTIVE_PROCESS_WHEAT_TASKS = 2 # Max concurrent tasks to take wheat to mill
 
+# --- UTILITY WEIGHTS (Plan 4 Task 1 — main tuning surface for the emergence phase) ---
+# score = base_value * urgency(stock_ratio) - distance_cost - risk_cost
+UTILITY_URGENCY_EXPONENT = 2.0          # (1 - stock/target)^exponent: >1 concentrates urgency
+                                         # near true scarcity; 1.0 = linear ramp.
+UTILITY_BASE_VALUE_BERRY = 50.0         # replaces BERRY_GATHER_TASK_PRIORITY as scoring anchor
+UTILITY_BASE_VALUE_WHEAT = 40.0         # replaces WHEAT_GATHER_TASK_PRIORITY
+UTILITY_BASE_VALUE_PROCESS_WHEAT = 750.0  # replaces PROCESS_WHEAT_TASK_PRIORITY; kept >> gather
+                                           # base values so processing still outranks gathering
+                                           # at comparable urgency, same as today's static gap.
+UTILITY_BASE_VALUE_PROVISION = 100.0    # replaces PROVISION_TASK_PRIORITY (station-recipe fallback,
+                                         # e.g. WATER->Bakery — no meaningful global stock target)
+UTILITY_DISTANCE_WEIGHT = 1.0           # multiplies raw grid-unit distance into a score cost
+UTILITY_CONSUMPTION_WINDOW_SECONDS = 60.0  # rolling window for SimMetrics recent-rate queries
+FOOD_DEFICIT_SECONDS_CAP = 1e6          # sentinel for "abundant" when consumption rate is ~0
+
 # Agent Action Timings (continued)
 DEFAULT_COLLECTION_TIME_FROM_STORAGE = 1.5 # Seconds to collect from a storage point
 DEFAULT_STORAGE_CAPACITY = 100

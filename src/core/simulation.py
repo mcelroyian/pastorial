@@ -46,6 +46,11 @@ class Simulation:
         self._spawn_faction_buildings()
         self._spawn_faction_agents()
 
+        # agent_manager is a lazily-constructed property, only safe to touch once
+        # _spawn_faction_agents() has run — wire it in after construction (Plan 4 Task 1).
+        for faction in self.factions:
+            faction.task_manager.agent_manager_ref = self.agent_manager
+
     # ------------------------------------------------------------------
     # Faction construction
     # ------------------------------------------------------------------
@@ -70,6 +75,7 @@ class Simulation:
             tm = TaskManager(resource_manager=self.resource_manager)
             tm.faction_id = i
             tm.metrics = self.metrics
+            tm._home_centroid = Vector2(regions[i].centerx, regions[i].centery)
             faction = Faction(
                 faction_id=i,
                 name=cfg["name"],

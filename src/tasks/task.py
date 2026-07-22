@@ -6,6 +6,7 @@ from typing import Optional, List, Callable, TYPE_CHECKING
 from .task_types import TaskType, TaskStatus
 from ..resources.resource_types import ResourceType
 from ..agents.intents import Intent, IntentStatus, MoveIntent, InteractAtTargetIntent
+from ..core import config
 
 if TYPE_CHECKING:
     from ..agents.agent import Agent
@@ -13,6 +14,30 @@ if TYPE_CHECKING:
     from ..resources.node import ResourceNode
     from ..resources.storage_point import StoragePoint
     from ..resources.processing import ProcessingStation
+    from ..factions.context import FactionContext
+
+
+# ---------------------------------------------------------------------------
+# Utility scoring — Plan 4 Task 1
+# ---------------------------------------------------------------------------
+
+# ResourceType -> (base_value, target_stock) for GatherAndDeliverTask.compute_score.
+# Only resources with a meaningful global stock target live here; anything else (e.g. WATER,
+# reached only via the station-provisioning path) falls back to a flat provisioning urgency.
+_GATHER_SCORE_PARAMS = {
+    ResourceType.BERRY: (config.UTILITY_BASE_VALUE_BERRY, config.MIN_BERRY_STOCK_LEVEL),
+    ResourceType.WHEAT: (config.UTILITY_BASE_VALUE_WHEAT, config.MIN_WHEAT_STOCK_LEVEL),
+}
+
+
+def _nearest_distance_cost(home_centroid, positions, weight: float) -> float:
+    """Coarse generation-time distance approximation: no agent is assigned to a task yet at
+    scoring time, so use the faction's home-region centroid as a stand-in anchor. Task 2's
+    contention-aware distance scoring replaces this once real claim/contention data exists."""
+    if not positions:
+        return 0.0
+    nearest = min((p - home_centroid).length() for p in positions)
+    return weight * nearest
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +127,11 @@ class Task(ABC):
     @abstractmethod
     def cleanup(self, agent: 'Agent', resource_manager: 'ResourceManager', success: bool):
         pass
+
+    def compute_score(self, faction_ctx: 'FactionContext', resource_manager: 'ResourceManager') -> float:
+        """Utility score for job-board ordering (Plan 4 Task 1). Default: static priority as
+        a float — legacy fallback for task types not migrated to scoring (e.g. PatrolTask)."""
+        return float(self.priority)
 
     def get_description(self) -> str:
         return f"{self.task_type.name} (Status: {self.status.name})"
@@ -327,6 +357,24 @@ class GatherAndDeliverTask(Task):
             self.status = TaskStatus.FAILED
             self.error_message = "Failed to commit delivery to storage."
 
+    def compute_score(self, faction_ctx: 'FactionContext', resource_manager: 'ResourceManager') -> float:
+        rt = self.resource_type_to_gather
+        if rt in _GATHER_SCORE_PARAMS:
+            base_value, target = _GATHER_SCORE_PARAMS[rt]
+            stock_ratio = faction_ctx.stock.get(rt, 0) / max(target, 1)
+        else:
+            # Station-provisioning fallback (e.g. WATER->Bakery): no meaningful global stock
+            # target exists for this resource type. Task creation is already gated by
+            # needed_qty > active_delivery_qty upstream in _generate_tasks_if_needed — this
+            # task only exists because a station needs it — so score at flat urgency.
+            base_value, stock_ratio = config.UTILITY_BASE_VALUE_PROVISION, 0.0
+        urgency = max(0.0, 1.0 - stock_ratio) ** config.UTILITY_URGENCY_EXPONENT
+        positions = [n.position for n in resource_manager.get_nodes_by_type(rt)]
+        distance_cost = _nearest_distance_cost(faction_ctx.home_centroid, positions,
+                                                config.UTILITY_DISTANCE_WEIGHT)
+        risk_cost = 0.0  # Task 1: no hostility exists yet. Task 3/4 wire real risk here.
+        return base_value * urgency - distance_cost - risk_cost
+
     def cleanup(self, agent: 'Agent', resource_manager: 'ResourceManager', success: bool):
         self._update_timestamp()
         if self.target_resource_node_ref and self.reserved_at_node:
@@ -518,6 +566,23 @@ class DeliverWheatToMillTask(Task):
             else:
                 self.status = TaskStatus.FAILED
                 self.error_message = "Mill refused delivery."
+
+    def compute_score(self, faction_ctx: 'FactionContext', resource_manager: 'ResourceManager') -> float:
+        # Urgency is keyed off FLOUR_POWDER (not wheat or bread) — matches this task's own
+        # generation gate in _generate_tasks_if_needed, and per the doc's framing each task
+        # scores by how far below target stock the faction is for its own resource.
+        stock_ratio = (faction_ctx.stock.get(ResourceType.FLOUR_POWDER, 0)
+                       / max(config.MIN_FLOUR_STOCK_LEVEL, 1))
+        urgency = max(0.0, 1.0 - stock_ratio) ** config.UTILITY_URGENCY_EXPONENT
+        from ..resources.mill import Mill
+        positions = [
+            s.position for s in resource_manager.stations_for(faction_ctx.faction_id)
+            if isinstance(s, Mill)
+        ]
+        distance_cost = _nearest_distance_cost(faction_ctx.home_centroid, positions,
+                                                config.UTILITY_DISTANCE_WEIGHT)
+        risk_cost = 0.0  # Task 1: no hostility exists yet. Task 3/4 wire real risk here.
+        return config.UTILITY_BASE_VALUE_PROCESS_WHEAT * urgency - distance_cost - risk_cost
 
     def cleanup(self, agent: 'Agent', resource_manager: 'ResourceManager', success: bool):
         self._update_timestamp()

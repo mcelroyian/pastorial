@@ -3,6 +3,8 @@ import time
 import logging
 from typing import List, Dict, Optional, TYPE_CHECKING
 
+from pygame.math import Vector2
+
 from .task import Task, GatherAndDeliverTask, DeliverWheatToMillTask, EatTask
 from .task_types import TaskType, TaskStatus
 from ..resources.resource_types import ResourceType # Assuming this path
@@ -10,11 +12,13 @@ from ..resources.mill import Mill # For checking Mill instances
 from ..resources.processing import MultiInputProcessingStation
 from ..core import config # For task generation settings
 from ..agents.intents import IntentStatus # For type hinting
+from ..factions.context import FactionContext
 
 # Forward references to avoid circular imports
 if TYPE_CHECKING:
     from ..agents.agent import Agent
     from ..resources.manager import ResourceManager
+    from ..agents.manager import AgentManager
 
 class TaskManager:
     """Manages the creation, assignment, and tracking of tasks for agents."""
@@ -28,6 +32,8 @@ class TaskManager:
         self.resource_manager_ref: 'ResourceManager' = resource_manager
         self.faction_id: Optional[int] = None  # set by Simulation; scopes stock queries
         self.metrics = None  # set by Simulation after construction
+        self.agent_manager_ref: Optional['AgentManager'] = None  # set by Simulation after construction
+        self._home_centroid = Vector2(0, 0)  # set by Simulation after construction (Plan 4 Task 1)
         self.logger = logging.getLogger(__name__)
 
         self._time_since_last_check: float = 0.0
@@ -316,10 +322,15 @@ class TaskManager:
         self.sim_time = sim_time
         self._time_since_last_check += dt
         if self._time_since_last_check >= self._task_generation_interval:
+            ctx = self._build_faction_context()
             if not manual_mode:
-                self._generate_tasks_if_needed()
+                self._generate_tasks_if_needed(ctx)
             else:
                 self.logger.debug("Skipping autonomous task generation due to manual control mode.")
+            # Rescore regardless of manual_mode — reordering the board isn't "autonomous
+            # generation," it doesn't create new work, just keeps existing entries' scores
+            # current (Plan 4 Task 1's "refreshed periodically for pending tasks").
+            self._rescore_pending_tasks(ctx)
             self._time_since_last_check = 0.0
 
 
@@ -332,14 +343,55 @@ class TaskManager:
             return self.resource_manager_ref.get_faction_resource_quantity(self.faction_id, resource_type)
         return self.resource_manager_ref.get_global_resource_quantity(resource_type)
 
-    def _generate_tasks_if_needed(self):
+    def _build_faction_context(self) -> FactionContext:
+        """Snapshot of this faction's state, built fresh each planning tick (Plan 4 Task 1)."""
+        stock = {rt: self._stock(rt) for rt in ResourceType}
+
+        consumption_rate: Dict[ResourceType, float] = {}
+        recent_deaths = 0
+        if self.metrics is not None:
+            window = config.UTILITY_CONSUMPTION_WINDOW_SECONDS
+            consumption_rate = {
+                rt: self.metrics.recent_consumption_rate(self.faction_id, rt, window=window)
+                for rt in ResourceType
+            }
+            recent_deaths = self.metrics.recent_deaths(self.faction_id, window=window)
+
+        agents_alive = 0
+        if self.agent_manager_ref is not None:
+            agents_alive = sum(
+                1 for a in self.agent_manager_ref.agents if a.owner_faction_id == self.faction_id
+            )
+
+        food_deficit_seconds = FactionContext.compute_food_deficit_seconds(
+            stock, consumption_rate, config.FOOD_DEFICIT_SECONDS_CAP
+        )
+
+        return FactionContext(
+            faction_id=self.faction_id,
+            sim_time=self.sim_time,
+            stock=stock,
+            consumption_rate=consumption_rate,
+            agents_alive=agents_alive,
+            recent_deaths=recent_deaths,
+            food_deficit_seconds=food_deficit_seconds,
+            home_centroid=self._home_centroid,
+        )
+
+    def _rescore_pending_tasks(self, ctx: FactionContext) -> None:
+        """Refresh cached scores (task.priority) for the whole board, then re-sort."""
+        for task in self.pending_tasks:
+            task.priority = task.compute_score(ctx, self.resource_manager_ref)
+        self.pending_tasks.sort(key=lambda t: t.priority, reverse=True)
+
+    def _generate_tasks_if_needed(self, ctx: FactionContext):
         """
         Generates tasks based on simulation state, e.g., low resource stock.
         Currently implements logic for Berry stock.
         """
         self.logger.debug(f"TaskManager: _generate_tasks_if_needed CALLED. Pending: {len(self.pending_tasks)}, Assigned: {len(self.assigned_tasks)}")
         # --- Berry Task Generation ---
-        current_berry_stock = self._stock(ResourceType.BERRY)
+        current_berry_stock = ctx.stock[ResourceType.BERRY]
         
         # print(f"DEBUG TaskManager: Current global berry stock: {current_berry_stock}, Min Level: {config.MIN_BERRY_STOCK_LEVEL}") # Debug
 
@@ -369,7 +421,7 @@ class TaskManager:
             # self.logger.debug(f"TaskManager: Berry stock ({current_berry_stock}) is sufficient. No new berry task needed.")
 
 # --- Wheat Task Generation ---
-        current_wheat_stock = self._stock(ResourceType.WHEAT)
+        current_wheat_stock = ctx.stock[ResourceType.WHEAT]
         
         # self.logger.debug(f"TaskManager: Current global wheat stock: {current_wheat_stock}, Min Level: {config.MIN_WHEAT_STOCK_LEVEL}")
 
@@ -400,14 +452,14 @@ class TaskManager:
         # --- Flour (from Wheat) Task Generation ---
         # This task involves an agent picking up Wheat from storage and delivering it to a Mill.
         min_flour_stock_config = getattr(config, 'MIN_FLOUR_STOCK_LEVEL', 20)
-        current_flour_stock = self._stock(ResourceType.FLOUR_POWDER)
+        current_flour_stock = ctx.stock[ResourceType.FLOUR_POWDER]
         self.logger.debug(f"FLOUR_TASK: Current Flour: {current_flour_stock}, Min Required: {min_flour_stock_config}")
 
         if current_flour_stock < min_flour_stock_config:
             self.logger.debug(f"FLOUR_TASK: Flour stock is LOW ({current_flour_stock} < {min_flour_stock_config}). Proceeding with checks.")
             
             process_wheat_qty_config = getattr(config, 'PROCESS_WHEAT_TASK_QUANTITY', 10)
-            wheat_in_storage = self._stock(ResourceType.WHEAT)
+            wheat_in_storage = ctx.stock[ResourceType.WHEAT]
             self.logger.debug(f"FLOUR_TASK: Wheat in storage: {wheat_in_storage}, Required for task: {process_wheat_qty_config}")
             
             mill_can_accept = False
