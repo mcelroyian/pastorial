@@ -54,6 +54,12 @@ class Simulation:
         for faction in self.factions:
             faction.task_manager.agent_manager_ref = self.agent_manager
 
+        # Duck-typed, same pattern as resource_manager.events (Plan 4 Task 2) — lets
+        # StealFromStorageTask look up a victim faction's GuardTask assignments and their
+        # agents' positions without widening Task.prepare()'s signature (Plan 4 Task 4).
+        self.resource_manager.agent_manager_ref = self.agent_manager
+        self.resource_manager.factions = self.factions
+
     # ------------------------------------------------------------------
     # Faction construction
     # ------------------------------------------------------------------

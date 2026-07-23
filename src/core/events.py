@@ -44,5 +44,11 @@ class EventLog:
         """Newest-first, up to n events."""
         return list(self._events)[-n:][::-1]
 
+    def since(self, since_sim_time: float) -> List[SimEvent]:
+        """All events at or after since_sim_time, oldest-first. Used for lazy/query-time
+        decay computations (e.g. FactionContext.compute_threat_level) rather than a stored,
+        incrementally-updated accumulator."""
+        return [e for e in self._events if e.sim_time >= since_sim_time]
+
     def count_since(self, event_type: str, since_sim_time: float) -> int:
         return sum(1 for e in self._events if e.event_type == event_type and e.sim_time >= since_sim_time)

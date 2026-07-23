@@ -5,7 +5,7 @@ from typing import List, Dict, Optional, TYPE_CHECKING
 
 from pygame.math import Vector2
 
-from .task import Task, GatherAndDeliverTask, DeliverWheatToMillTask, EatTask, StealFromStorageTask
+from .task import Task, GatherAndDeliverTask, DeliverWheatToMillTask, EatTask, StealFromStorageTask, GuardTask
 from .task_types import TaskType, TaskStatus
 from ..resources.resource_types import ResourceType # Assuming this path
 from ..resources.mill import Mill # For checking Mill instances
@@ -97,6 +97,14 @@ class TaskManager:
         self.add_task(task)
         self.logger.debug(f"TaskManager: Created StealFromStorageTask {task.task_id} for "
                            f"{quantity} BREAD, P:{priority}.")
+        return task
+
+    def create_guard_task(self, storage_point, priority: float) -> Optional[Task]:
+        """Creates a new GuardTask (Plan 4 Task 4) and adds it to the pending list."""
+        task = GuardTask(priority=priority, storage_point=storage_point)
+        self.add_task(task)
+        self.logger.debug(f"TaskManager: Created GuardTask {task.task_id} for storage "
+                           f"{storage_point.id}, P:{priority}.")
         return task
 
     def get_available_tasks(self) -> List[Task]:
@@ -387,6 +395,9 @@ class TaskManager:
             stock, consumption_rate, config.FOOD_DEFICIT_SECONDS_CAP
         )
 
+        events = getattr(self.resource_manager_ref, 'events', None)
+        threat_level = FactionContext.compute_threat_level(events, self.faction_id, self.sim_time)
+
         return FactionContext(
             faction_id=self.faction_id,
             sim_time=self.sim_time,
@@ -396,6 +407,7 @@ class TaskManager:
             recent_deaths=recent_deaths,
             food_deficit_seconds=food_deficit_seconds,
             home_centroid=self._home_centroid,
+            threat_level=threat_level,
         )
 
     def _rescore_pending_tasks(self, ctx: FactionContext) -> None:
@@ -571,6 +583,41 @@ class TaskManager:
                 quantity=config.STEAL_TASK_QUANTITY,
                 priority=0,  # overwritten by the next _rescore_pending_tasks call
             )
+
+        # --- Guard Task Generation (Plan 4 Task 4) ---
+        # Deliberately unconditional too, mirroring the raid generation just above: no
+        # `if ctx.threat_level > 0` gate. When threat is 0, GuardTask.compute_score reduces to
+        # `-distance_cost` (negative), so assign_task_to_agent's score-floor break (Task 3)
+        # keeps it off the board in practice — scoring alone decides, same discipline as raids.
+        # Building-agnostic (per Plan 4 Task 4 scoping): retarget whichever owned storage point
+        # currently isn't guarded and holds the most worth protecting, each cycle.
+        active_guard_tasks = sum(
+            1 for task in self.pending_tasks
+            if isinstance(task, GuardTask)
+        )
+        active_guard_tasks += sum(
+            1 for task in self.assigned_tasks.values()
+            if isinstance(task, GuardTask)
+        )
+        if active_guard_tasks < config.MAX_ACTIVE_GUARD_TASKS:
+            guarded_ids = {
+                task.storage_point.id for task in self.pending_tasks
+                if isinstance(task, GuardTask)
+            }
+            guarded_ids |= {
+                task.storage_point.id for task in self.assigned_tasks.values()
+                if isinstance(task, GuardTask)
+            }
+            candidates = [
+                sp for sp in self.resource_manager_ref.storage_points_for(self.faction_id)
+                if sp.id not in guarded_ids
+            ]
+            if candidates:
+                target = max(candidates, key=lambda sp: sum(sp.stored_resources.values()))
+                self.create_guard_task(
+                    storage_point=target,
+                    priority=0,  # overwritten by the next _rescore_pending_tasks call
+                )
 
     def get_task_by_id(self, task_id: uuid.UUID) -> Optional[Task]:
         """Retrieves a task by its ID from any of the lists."""

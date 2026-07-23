@@ -119,6 +119,20 @@ class AgentManager:
         for agent in self.agents:
             agent_renderer.draw_agent(agent, screen, grid, selected_agent)
 
+    def get_agents_near(self, position: pygame.math.Vector2, radius: float,
+                         faction_id: Optional[int] = None) -> List[Agent]:
+        """Agents within radius of position, optionally filtered to one faction.
+
+        Linear scan — fine at current scale (~12 agents total, Plan 4 Task 4); revisit with a
+        spatial index only if agent counts grow enough to matter.
+        """
+        radius_sq = radius * radius
+        return [
+            agent for agent in self.agents
+            if (faction_id is None or agent.owner_faction_id == faction_id)
+            and (agent.position - position).length_squared() <= radius_sq
+        ]
+
     def get_agent_at_position(self, grid_pos: pygame.math.Vector2) -> Optional[Agent]:
         """
         Finds and returns an agent at the given grid coordinates.

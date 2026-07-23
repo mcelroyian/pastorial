@@ -3,6 +3,8 @@ import time
 from abc import ABC, abstractmethod
 from typing import Optional, List, Callable, TYPE_CHECKING
 
+from pygame.math import Vector2
+
 from .task_types import TaskType, TaskStatus
 from ..resources.resource_types import ResourceType
 from ..agents.intents import Intent, IntentStatus, MoveIntent, InteractAtTargetIntent
@@ -60,6 +62,56 @@ def _food_deficit_urgency(deficit_seconds: float) -> float:
         return 0.0
     ratio = min(1.0, deficit_seconds / horizon)
     return (1.0 - ratio) ** config.UTILITY_URGENCY_EXPONENT
+
+
+def _count_guards_near(resource_manager, storage_point: 'StoragePoint') -> int:
+    """How many of storage_point's owner's GuardTask-assigned agents are within GUARD_RADIUS.
+
+    Deliberately scoped to agents actively assigned a GuardTask *for this exact building*, not
+    just any nearby agent — an agent passing through to eat at its own storage shouldn't
+    incidentally grant free deterrence, or "guards don't gather" wouldn't be a real tradeoff
+    (Plan 4 Task 4). Perfect information, same simplification as haul_factor (Task 3).
+    """
+    agent_manager = getattr(resource_manager, 'agent_manager_ref', None)
+    factions = getattr(resource_manager, 'factions', None)
+    if agent_manager is None or not factions:
+        return 0
+    victim_faction_id = storage_point.owner_faction_id
+    victim_tm = next((f.task_manager for f in factions if f.faction_id == victim_faction_id), None)
+    if victim_tm is None:
+        return 0
+    guard_agent_ids = {
+        task.agent_id for task in victim_tm.assigned_tasks.values()
+        if isinstance(task, GuardTask) and task.storage_point is storage_point
+    }
+    if not guard_agent_ids:
+        return 0
+    nearby = agent_manager.get_agents_near(storage_point.position, config.GUARD_RADIUS,
+                                           faction_id=victim_faction_id)
+    return sum(1 for a in nearby if a.id in guard_agent_ids)
+
+
+def _score_raid_candidate(sp: 'StoragePoint', resource_manager, anchor_position,
+                           resource_type: ResourceType):
+    """(haul_factor, distance_cost, risk_cost) for one candidate enemy storage point."""
+    haul = min(sp.stored_resources.get(resource_type, 0), config.DEFAULT_AGENT_INVENTORY_CAPACITY)
+    distance_cost = config.UTILITY_DISTANCE_WEIGHT * (sp.position - anchor_position).length()
+    defenders = _count_guards_near(resource_manager, sp)
+    risk_cost = config.RAID_RISK_COST_PER_DEFENDER * defenders
+    return haul, distance_cost, risk_cost
+
+
+def _best_raid_target(enemy_storage: List['StoragePoint'], resource_manager, anchor_position,
+                       resource_type: ResourceType):
+    """Pick the enemy storage point maximizing haul - distance_cost - risk_cost, not simply
+    the richest — this is what makes raiding shift toward undefended targets when a rival's
+    best target is guarded (Plan 4 Task 4), instead of always the fattest stockpile.
+
+    Returns (storage_point, haul_factor, distance_cost, risk_cost).
+    """
+    scored = [(sp,) + _score_raid_candidate(sp, resource_manager, anchor_position, resource_type)
+              for sp in enemy_storage]
+    return max(scored, key=lambda t: t[1] - t[2] - t[3])
 
 
 # ---------------------------------------------------------------------------
@@ -698,14 +750,23 @@ class StealFromStorageTask(Task):
 
         # 1. Reserve BREAD for pickup at an ENEMY faction's storage — force=True bypasses the
         # Plan 3 faction gate. Perfect information (Task 3 simplification, per the doc): try
-        # the enemy storage point with the largest actual BREAD stock first.
-        enemy_storage = sorted(
-            (sp for sp in resource_manager.storage_points
-             if sp.owner_faction_id not in (None, faction_id)
-             and sp.has_resource(self.resource_to_steal, 1)),
-            key=lambda sp: sp.stored_resources.get(self.resource_to_steal, 0),
-            reverse=True,
-        )
+        # candidates best-first by the same haul/distance/risk ordering compute_score uses
+        # (Plan 4 Task 4), so prepare() doesn't walk into a heavily-guarded target that scoring
+        # would have steered around — falling back to the next-best on reservation failure.
+        candidates = [
+            sp for sp in resource_manager.storage_points
+            if sp.owner_faction_id not in (None, faction_id)
+            and sp.has_resource(self.resource_to_steal, 1)
+        ]
+        enemy_storage = [
+            t[0] for t in sorted(
+                (
+                    (sp,) + _score_raid_candidate(sp, resource_manager, agent.position, self.resource_to_steal)
+                    for sp in candidates
+                ),
+                key=lambda t: t[1] - t[2] - t[3], reverse=True,
+            )
+        ]
         for sp in enemy_storage:
             reserved = sp.reserve_for_pickup(self.task_id, self.resource_to_steal, qty_to_reserve,
                                               faction_id=faction_id, force=True)
@@ -781,6 +842,26 @@ class StealFromStorageTask(Task):
         return self.status != TaskStatus.FAILED
 
     def _on_steal_complete(self, agent, task, resource_manager):
+        # Guard effect (Plan 4 Task 4, nonviolent v1): checked at the moment the steal would
+        # land, not at prepare() time — a guard can arrive during the raider's travel/interact
+        # window. Failing here (rather than preventing prepare()) is deliberate: the raider
+        # commits fully and only discovers the target was defended on completion.
+        defenders = _count_guards_near(resource_manager, self.target_storage_ref)
+        if defenders >= config.MIN_DEFENDERS_TO_BLOCK_STEAL:
+            events = getattr(resource_manager, 'events', None)
+            if events is not None:
+                events.record(
+                    "raid_repelled",
+                    faction_id=getattr(agent, 'owner_faction_id', None),
+                    other_faction_id=self.victim_faction_id,
+                    position=self.target_storage_ref.position,
+                    resource_type=self.resource_to_steal.name,
+                    detail=str(defenders),
+                )
+            self.status = TaskStatus.FAILED
+            self.error_message = "Raid repelled by defenders."
+            return
+
         can_carry = agent.inventory_capacity - agent.current_inventory.get('quantity', 0)
         amount = min(can_carry, self.reserved_at_storage_for_pickup_quantity)
         if amount > 0:
@@ -841,17 +922,14 @@ class StealFromStorageTask(Task):
             return -1e9  # disqualifying sentinel — no reachable target, never crashes the sort
 
         urgency = _food_deficit_urgency(faction_ctx.food_deficit_seconds)
-        best_stock = max(sp.stored_resources.get(self.resource_to_steal, 0) for sp in enemy_storage)
         # expected_haul: perfect information (Task 3 simplification, per the doc) — capped at a
         # typical single-trip carry so one large enemy stockpile can't dominate the score
-        # independent of what a raider can physically bring home in one run.
-        haul_factor = min(best_stock, config.DEFAULT_AGENT_INVENTORY_CAPACITY)
-
-        positions_and_pressure = [(sp.position, 0.0) for sp in enemy_storage]
-        distance_cost = _nearest_distance_cost(
-            faction_ctx.home_centroid, positions_and_pressure, config.UTILITY_DISTANCE_WEIGHT
+        # independent of what a raider can physically bring home in one run. Target selection
+        # (Plan 4 Task 4) maximizes haul - distance - risk, not simply richest-stock, so a
+        # guarded fat target can lose out to a smaller undefended one.
+        _best_sp, haul_factor, distance_cost, risk_cost = _best_raid_target(
+            enemy_storage, resource_manager, faction_ctx.home_centroid, self.resource_to_steal
         )
-        risk_cost = 0.0  # Task 3: no defenders exist yet. Task 4 wires GuardTask-driven risk here.
 
         return (config.UTILITY_BASE_VALUE_RAID * urgency * haul_factor
                 - distance_cost - risk_cost - config.UTILITY_RAID_PEACE_BIAS)
@@ -879,6 +957,67 @@ class StealFromStorageTask(Task):
         if idx == 3 and dropoff:
             return f"Depositing stolen {self.resource_to_steal.name} at {dropoff.position}"
         return f"Steal {self.resource_to_steal.name} ({self.status.name})"
+
+
+# ---------------------------------------------------------------------------
+# GuardTask — loiter near an owned building, discouraging raids (Plan 4 Task 4)
+# ---------------------------------------------------------------------------
+
+class GuardTask(Task):
+    """Agent moves to and loiters near an owned storage point.
+
+    No combat, no direct interaction — presence alone is the entire effect: checked by
+    StealFromStorageTask, both as a risk_cost term at scoring time (_count_guards_near) and as
+    an outright block at steal-completion time. Building-agnostic by design: TaskManager picks
+    whichever owned storage point is currently most worth protecting each generation cycle
+    (see _generate_tasks_if_needed), not hardcoded to the bread building specifically.
+    """
+
+    def __init__(self, priority: float, storage_point: 'StoragePoint'):
+        super().__init__(TaskType.GUARD, priority)
+        self.storage_point = storage_point
+        self._waypoints: List = []
+
+    def prepare(self, agent: 'Agent', resource_manager: 'ResourceManager') -> bool:
+        self._update_timestamp()
+        self.status = TaskStatus.PREPARING
+
+        grid = agent.grid
+        center = self.storage_point.position
+        post_a = grid.find_walkable_adjacent_tile(center)
+        if post_a is None:
+            self.error_message = "No walkable tile near guard post."
+            self.status = TaskStatus.FAILED
+            return False
+        # A second nearby post to loiter between; falls back to the same tile if the grid
+        # can't offer a distinct one (e.g. a building boxed in on all but one side) — the guard
+        # just stands still, which is a degraded-but-harmless outcome.
+        post_b = grid.find_walkable_adjacent_tile(center + Vector2(config.GUARD_RADIUS, 0)) or post_a
+        self._waypoints = [post_a, post_b]
+
+        self.steps = [
+            MoveToStep(lambda i=i: self._waypoints[i % 2])
+            for i in range(config.GUARD_LOITER_LEGS)
+        ]
+        self.current_step_index = 0
+        self.status = TaskStatus.IN_PROGRESS
+        self._submit_next_step(agent, resource_manager)
+        return self.status != TaskStatus.FAILED
+
+    def cleanup(self, agent: 'Agent', resource_manager: 'ResourceManager', success: bool):
+        pass
+
+    def compute_score(self, faction_ctx: 'FactionContext', resource_manager: 'ResourceManager') -> float:
+        stock_value = sum(self.storage_point.stored_resources.values())
+        stock_worth = min(stock_value, config.GUARD_STOCK_VALUE_CAP) / config.GUARD_STOCK_VALUE_CAP
+        distance_cost = config.UTILITY_DISTANCE_WEIGHT * (
+            self.storage_point.position - faction_ctx.home_centroid
+        ).length()
+        return (config.UTILITY_BASE_VALUE_GUARD * faction_ctx.threat_level * stock_worth
+                - distance_cost)
+
+    def get_description(self) -> str:
+        return f"Guarding {self.storage_point.position}"
 
 
 # ---------------------------------------------------------------------------

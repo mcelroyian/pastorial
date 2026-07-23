@@ -8,6 +8,7 @@ class TaskType(Enum):
     PATROL = auto()
     EAT = auto()
     STEAL = auto()
+    GUARD = auto()
 
 class TaskStatus(Enum):
     """Defines the possible states of a task."""

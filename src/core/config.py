@@ -166,6 +166,59 @@ MAX_ACTIVE_STEAL_TASKS = 1              # cap on concurrent pending/assigned rai
                                          # alone decides whether the task is ever picked.
 STEAL_TASK_QUANTITY = DEFAULT_AGENT_INVENTORY_CAPACITY  # attempt a full single-trip carry per raid
 
+# --- THREAT & GUARD (Plan 4 Task 4 — defense) ---
+# threat_level is computed lazily each planning tick (FactionContext, no stored state) as an
+# age-weighted decay sum over EventLog entries where this faction was the victim: theft
+# (other_faction_id == self) weighted high, contention (faction_id == self, i.e. "my preferred
+# node got denied to me") weighted low. See TaskManager._build_faction_context.
+THREAT_WEIGHT_THEFT = 10.0               # per theft-victim event, before decay
+THREAT_WEIGHT_CONTENTION = 0.005         # per contention-victim event, before decay — tuned far
+                                          # below a naive "order of magnitude below theft": wild-
+                                          # node contention is near-continuous under any
+                                          # territorial overlap (~400 events/500s observed in
+                                          # ASYMMETRIC), so its decay-sum equilibrium at weight
+                                          # 1.0 alone was enough to trigger guards from ordinary
+                                          # foraging, before any real hostility (see
+                                          # docs/plan-4-progress.md, Task 4 tuning). Also capped
+                                          # below (THREAT_CONTENTION_CAP) as a hard ceiling.
+THREAT_CONTENTION_CAP = 0.02             # ceiling on the contention component of threat_level,
+                                          # independent of event rate. Tuned so that
+                                          # UTILITY_BASE_VALUE_GUARD * cap alone (~0.3) stays
+                                          # below even the smallest realistic distance_cost to an
+                                          # owned storage point — contention alone must never be
+                                          # enough to clear GuardTask's score-floor bar; only
+                                          # theft (weight 10, no cap) does that.
+THREAT_DECAY_HALFLIFE_SECONDS = 120.0    # 2 sim-minutes to halve — "decay over sim-minutes so
+                                          # peace can return" per the plan doc
+THREAT_LOOKBACK_SECONDS = 1200.0         # ~10 half-lives; events older than this contribute
+                                          # negligibly, so skip scanning past them
+
+# raid_score gains a real risk_cost term this rung: guarded targets accrue
+# RAID_RISK_COST_PER_DEFENDER per active guard within GUARD_RADIUS, on top of peace_bias —
+# this is what makes raid target selection prefer undefended enemy storage (see
+# task._best_raid_target) instead of always the richest.
+RAID_RISK_COST_PER_DEFENDER = 60.0
+GUARD_RADIUS = 3.0                       # grid units; used both for "is a defender near the
+                                          # target" (raid side) and the guard's loiter distance
+MIN_DEFENDERS_TO_BLOCK_STEAL = 1         # >= this many of the victim's own GuardTask-assigned
+                                          # agents within GUARD_RADIUS fails the steal outright
+                                          # (deliberately scoped to agents ON a GuardTask, not
+                                          # any nearby agent — an agent passing through to eat
+                                          # shouldn't incidentally grant free deterrence; that
+                                          # would erase "guards don't gather" as a real tradeoff)
+
+UTILITY_BASE_VALUE_GUARD = 15.0          # guard_score = UTILITY_BASE_VALUE_GUARD * threat_level
+                                          #   * stock_worth_fraction - distance_cost
+GUARD_STOCK_VALUE_CAP = 40.0             # total units (summed across resource types) at a
+                                          # storage point beyond which "worth protecting" saturates
+GUARD_LOITER_LEGS = 6                    # waypoint legs per GuardTask assignment — keeps one
+                                          # agent guarding for a stretch instead of re-tasking
+                                          # every generation tick
+MAX_ACTIVE_GUARD_TASKS = 1               # cap on concurrent pending/assigned guard tasks per
+                                          # faction — generation unconditional (mirrors
+                                          # MAX_ACTIVE_STEAL_TASKS); scoring alone decides if a
+                                          # guard is ever picked over economic/raid tasks
+
 # Agent Action Timings (continued)
 DEFAULT_COLLECTION_TIME_FROM_STORAGE = 1.5 # Seconds to collect from a storage point
 DEFAULT_STORAGE_CAPACITY = 100

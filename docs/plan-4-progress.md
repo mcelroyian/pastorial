@@ -3,10 +3,10 @@
 **Plan doc:** `docs/plan-4-emergent-conflict.md` — read Task 4 there before continuing.
 **Prerequisite docs:** `docs/plan-3-factions.md` (factions, done), `docs/balance-notes.md` (tuning history).
 
-**Branch:** `main` — work is uncommitted as of this handoff (Task 3 implementation complete,
-tests green, not yet committed — confirm with the user before committing/pushing).
+**Branch:** `main` — Task 3 (`dbfa088`) is committed. Task 4 implementation is complete, tests
+green, not yet committed — confirm with the user before committing/pushing.
 
-**Start reading here, then the plan doc for the Task 4 spec.**
+**Start reading here, then the plan doc for the Task 5 spec.**
 
 ---
 
@@ -16,12 +16,12 @@ tests green, not yet committed — confirm with the user before committing/pushi
 |------|-------------|--------|
 | Task 1 | Utility-based task scoring (the emergence engine) | ✅ Done (`b1f93d6`) |
 | Task 2 | Rung 1 — Contested wild resources (no violence) | ✅ Done (`b4063af`) |
-| Task 3 | Rung 2 — Theft (`StealFromStorageTask`) | ✅ Done (uncommitted) |
-| Task 4 | Rung 3 — Defense (`GuardTask`, threat response) | 🔴 **Next up** — not started |
-| Task 5 | Rung 4 — Combat | ⬜ Not started |
+| Task 3 | Rung 2 — Theft (`StealFromStorageTask`) | ✅ Done (`dbfa088`) |
+| Task 4 | Rung 3 — Defense (`GuardTask`, threat response) | ✅ Done (uncommitted) |
+| Task 5 | Rung 4 — Combat | 🔴 **Next up** — not started |
 | Task 6 | Tuning & the emergence report | ⬜ Not started |
 
-Full test suite: **71 passed** (`pytest` from repo root; 60 baseline + 11 new for Task 3).
+Full test suite: **82 passed** (`pytest` from repo root; 71 baseline + 11 new for Task 4).
 Peaceful baseline (`tests/test_balance.py`, `tests/test_factions.py`) is the regression gate —
 must stay green through every future rung.
 
@@ -168,45 +168,116 @@ it — purely emergent, gated only by utility scoring, no `if faction.at_war` an
   If a live visual check matters going forward, worth adding a `--scenario` CLI flag to
   `main.py`/`GameLoop` in a later task.
 
+### Task 4 — Defense (`GuardTask`, threat response, uncommitted)
+
+Victims can now respond to theft: a decaying, EventLog-derived `threat_level` drives a new
+`GuardTask` that loiters at an owned storage point and makes raiding it materially riskier —
+still entirely nonviolent, purely emergent (no `if faction.at_war` anywhere).
+
+- **`AgentManager.get_agents_near(pos, radius, faction_id=None)`** (`src/agents/manager.py`)
+  — new. Linear scan over `self.agents`, optional faction filter. Fine at current scale
+  (~12 agents total); comment says so instead of adding an index.
+- **`FactionContext.threat_level`** (`src/factions/context.py`, `compute_threat_level`
+  staticmethod) — deliberately **lazy/query-time**, not a stored accumulator: scans
+  `EventLog.since(sim_time - THREAT_LOOKBACK_SECONDS)` fresh every planning tick and sums
+  `weight * 0.5**(age/half_life)` per qualifying event. `theft` counts when
+  `other_faction_id == self` (I was the victim); `claim_contention` counts when
+  `faction_id == self` (my preferred node was denied to me) — same field-semantics
+  distinction documented in Task 2's contention event, now load-bearing for the first time.
+  No new persistent state anywhere, per the "Key Architecture Notes" decay discipline below.
+- **`GuardTask`** (`src/tasks/task.py`, after `StealFromStorageTask`) — building-agnostic by
+  design (per explicit direction during planning, over a "just guard the bread building"
+  alternative): `TaskManager` retargets whichever owned, not-already-guarded storage point
+  currently holds the most stock each generation cycle. Loiters between two waypoints for
+  `GUARD_LOITER_LEGS` legs (long enough that one agent stays "the guard" for a stretch, not
+  re-tasked every 5s planning tick). `compute_score` = `UTILITY_BASE_VALUE_GUARD *
+  threat_level * stock_worth_fraction - distance_cost`; generation is unconditional
+  (mirrors Task 3's raid generation) and relies entirely on the existing score-floor `break`
+  in `assign_task_to_agent` to keep it off the board when `threat_level` is 0 (score reduces
+  to `-distance_cost`, i.e. negative).
+- **Guard effect** — checked in `StealFromStorageTask._on_steal_complete`, **not** at
+  `prepare()` time: a guard can arrive during the raider's travel/interact window, so the
+  raider commits fully and only discovers the target was defended on completion. Blocks (and
+  emits a new `raid_repelled` event) if `_count_guards_near` finds
+  `>= config.MIN_DEFENDERS_TO_BLOCK_STEAL` of the *victim's own agents currently assigned a
+  `GuardTask` for that exact building* within `config.GUARD_RADIUS`.
+  **Deliberately scoped to guard-task-assigned agents, not any nearby agent** — the bread
+  storage point is also where agents run `EatTask`, so "any nearby agent" would have given
+  free, incidental deterrence from ordinary eating traffic and erased "guards don't gather"
+  as a real opportunity-cost tradeoff. Required threading `resource_manager.agent_manager_ref`
+  and `resource_manager.factions` (new duck-typed attributes, wired in `Simulation.__init__`,
+  same pattern as `resource_manager.events`) so `_count_guards_near` can reach the *victim's*
+  `TaskManager.assigned_tasks` from inside the raider's task.
+- **Raid targeting/scoring became guard-aware**: `_best_raid_target` / `_score_raid_candidate`
+  (new module-level helpers in `task.py`) pick the enemy storage maximizing `haul - distance -
+  risk`, not simply richest-stock — `risk_cost` (inert since Task 1/3) is now
+  `RAID_RISK_COST_PER_DEFENDER * defender_count`. Used identically by `compute_score` (anchor:
+  `faction_ctx.home_centroid`) and `prepare()` (anchor: `agent.position`) so the two stay
+  consistent. With only one raid-worthy building per faction today this mostly manifests as
+  "guarding it lowers the raid score," not literal target-switching — the doc's "or shifts to
+  unguarded targets" phrasing already anticipates this degenerate single-target case.
+- **Critical empirical tuning — contention is far too continuous to weight naively.**
+  The plan doc says "theft high, contention low"; a literal ~10x gap
+  (`THREAT_WEIGHT_THEFT=10`, `THREAT_WEIGHT_CONTENTION=1`) broke
+  `tests/test_theft.py::test_theft_event_fields`: `ASYMMETRIC` produces on the order of
+  400 `claim_contention` events per 500 sim-seconds (ordinary wild-node competition, nothing
+  to do with real hostility), so an uncapped decay-sum over even a low per-event weight
+  reaches a high **steady-state equilibrium** (`weight * event_rate * half_life/ln2`) that
+  alone cleared `GuardTask`'s score-floor bar — a guard formed from ambient foraging at
+  ~t=30-40s, long before the seed's one real raid at ~t=317s, and blocked it outright.
+  Fixed with **two levers together** (weight alone wasn't enough): `THREAT_WEIGHT_CONTENTION`
+  down to `0.005`, plus a separate hard `THREAT_CONTENTION_CAP = 0.02` on the contention
+  component specifically (independent of event rate) — tuned so
+  `UTILITY_BASE_VALUE_GUARD * cap` (~0.3) stays below even the smallest realistic
+  `distance_cost` to an owned building, i.e. contention alone can now *never* clear the
+  score-floor bar; only theft (weight 10, uncapped) does. Verified via a headless per-seed
+  trace (seeds 1-6): guard-first-seen now lands at/after the seed's first theft event in
+  every seed that raids at all (seed 6 raids zero times at baseline, matching Task 3's
+  documented "1 in 6 seeds doesn't raid" — not a regression).
+- **Tests**: `tests/test_guard.py` (11 new) — `get_agents_near` filtering,
+  `compute_threat_level` weighting/capping/decay (including the "decays, guard stops scoring
+  positive" verify criterion, checked directly via `sim_time` manipulation rather than a full
+  tick loop — same efficiency precedent as `tests/test_task_scoring_raid.py`), guard-blocks-
+  steal and its inverse (unguarded succeeds; a merely-nearby-but-not-guarding agent doesn't
+  block), guarded-target-scores-worse, `GuardTask.compute_score` threat/stock scaling, and an
+  `ASYMMETRIC` scenario test asserting a guard appears at/after every seed's first theft.
+- **Manual sanity**: same constraint as Task 3 (`main.py` hardcodes `DEFAULT`, no CLI scenario
+  switch) — verified `DEFAULT` renders/runs cleanly via the `run` skill (10s live run,
+  screenshot inspected, task board/agents/buildings all normal, no crash); `ASYMMETRIC`'s
+  guard-after-theft behavior verified headlessly (see tuning note above).
+
 ---
 
 ## What Comes Next
 
-### Task 4 — Rung 3: Defense (`GuardTask`, threat response)
+### Task 5 — Rung 4: Combat
 
-Per `docs/plan-4-emergent-conflict.md`, Task 4 section:
+Per `docs/plan-4-emergent-conflict.md`, Task 5 section — the final rung. Violence enters as
+another scored option (`AttackIntent`/`CombatBehavior`) and as guard enforcement, not as a mode
+switch. Key pieces: `Agent.health`, death-path extension (cause-of-death metrics, dropped-goods
+handling), `FleeBehavior`, guards escalating to attack raiders caught stealing, `AttackTask`
+generation gated behind high threat + high scarcity. See the plan doc for full detail — it's
+the largest single rung (explicitly flagged as such: health, combat math, flee, a new
+`SYMMETRIC SCARCITY` scenario, and a de-escalation test all in one).
 
-- **`FactionContext.threat_level`**: currently inert (`0.0`), needs to become a decaying
-  accumulator fed by hostility events against the faction — theft (now real, from Task 3)
-  weighted high, contention (Task 2) weighted low. Decay over sim-minutes so peace can
-  return. The `EventLog` (`src/core/events.py`) already has everything needed to compute
-  this: `theft` events carry `other_faction_id` = victim, so a faction can query "how much
-  have I been victimized recently" directly from the event log.
-- **`GuardTask`**: agent moves to own storage/building and loiters — reuse/extend
-  `PatrolTask`'s waypoint pattern. Score scales with `threat_level` and stock worth
-  protecting; competes against economic *and raid* tasks on the same board (guards don't
-  gather).
-- **Guard effect (nonviolent v1)**: a raider's `InteractStep("STEAL", ...)` should fail if
-  ≥N enemy agents are within `config.GUARD_RADIUS` of the target when the steal begins — add
-  a proximity check inside `StealFromStorageTask._on_steal_complete` (or a new step
-  precondition). Failed raid should still emit an event and raise the raider's perceived
-  risk of that target — this is exactly the `risk_cost` term already wired to `0.0` in both
-  `GatherAndDeliverTask.compute_score` (from Task 1) and `StealFromStorageTask.compute_score`
-  (from Task 3): Task 4 activates it, no new term needed.
-- **Requires** `AgentManager.get_agents_near(pos, radius, faction_id=...)` — doesn't exist
-  yet. Linear scan is fine at current scale (~12 agents total); leave a comment, not an
-  optimization.
+### Before starting Task 5
 
-### Before starting Task 4
-
-- Re-run `pytest` from a clean checkout to confirm this handoff's state is still green (71
+- Re-run `pytest` from a clean checkout to confirm this handoff's state is still green (82
   passed) before layering more on top.
-- Read the "Critical bug found and fixed" note above (`assign_task_to_agent`'s score-floor
-  `break`) before adding `GuardTask` to the board — it's a generic mechanism that will also
-  govern whether guarding ever gets picked, not just raiding.
-- `UTILITY_CONSUMPTION_WINDOW_SECONDS` is now 300s (was 60s) — if Task 4's `threat_level`
-  decay or any other new signal depends on shorter-window responsiveness, this is the
-  constant to revisit.
+- `threat_level` is now real and load-bearing (`GuardTask` reads it) — Task 5's `AttackTask`
+  generation ("gated behind high threat + high scarcity") can reuse it directly; no new
+  hostility-accumulation mechanism should be needed, per the "`FactionContext`/`EventLog` are
+  the extension points" note below. A `death` or `attack` event type feeding back into
+  `threat_level` would need its own weight tuned with the same care as contention's (see the
+  empirical tuning note above) — don't assume a naive weight is safe without checking event
+  frequency first.
+- `_count_guards_near`'s "only agents actively assigned a GuardTask count as defenders"
+  design choice will matter again for Task 5's "guard may attack a raider caught stealing" —
+  the same guard-agent set is the natural source for "which of my agents should respond to
+  this trespass."
+- `resource_manager.agent_manager_ref` and `resource_manager.factions` (new Task 4 duck-typed
+  attributes) are now available for any task that needs to reach another faction's
+  `TaskManager`/agents — Task 5's flee/attack logic will likely need both again.
 
 ---
 
@@ -217,27 +288,48 @@ Per `docs/plan-4-emergent-conflict.md`, Task 4 section:
   duck-typed attribute on `resource_manager` (or wherever `prepare()` already has a
   reference), set once post-construction in `Simulation.__init__`, read via
   `getattr(x, 'attr_name', None)` with a None-guard. Established in Task 1
-  (`tm.metrics`/`tm.agent_manager_ref`) and Task 2 (`resource_manager.events`).
+  (`tm.metrics`/`tm.agent_manager_ref`), Task 2 (`resource_manager.events`), and Task 4
+  (`resource_manager.agent_manager_ref`/`resource_manager.factions` — the latter needed
+  because a hostile task must sometimes read the *victim's* `TaskManager`, not just its own).
 - **Every accumulator must decay, and decay should be lazy/query-time or piggyback an
   existing per-tick hook** — `SimMetrics`'s rolling windows prune lazily at query time;
   `ResourceNode.contention_pressure` decays inside the node's existing `update(dt)` (no new
-  timer). Look for an existing tick hook before adding a new one. `threat_level` (Task 4)
-  should follow the same discipline.
+  timer); `threat_level` (Task 4) is computed fresh every planning tick straight from
+  `EventLog`, no stored state at all. Look for an existing tick hook (or go fully lazy)
+  before adding a new timer.
+- **A frequent, low-weight event source can still dominate a decay-sum accumulator — check
+  the steady-state, not just the per-event weight.** For a Poisson-ish event stream at rate
+  λ with per-event weight `w` and exponential half-life `h`, the equilibrium value is
+  `w * λ * h / ln(2)` — if λ is high (as `claim_contention` is: ~400 events/500s in
+  `ASYMMETRIC`, pure ordinary wild-node competition), even a "low" weight can equilibrate
+  to something that swamps a rare-but-heavy signal like `theft`. This is why `threat_level`
+  needed both a smaller `THREAT_WEIGHT_CONTENTION` *and* a separate hard
+  `THREAT_CONTENTION_CAP` (Task 4) — the cap is what actually guarantees ambient noise can
+  never alone cross a scoring threshold, independent of how the event rate might shift later.
+  Any future rung that folds another frequent event type into an accumulator should compute
+  this equilibrium before picking a weight, not tune-by-running-and-eyeballing.
 - **`FactionContext` and `EventLog` are the two extension points** every later rung reads
-  from — `threat_level` on `FactionContext` is still inert/generic today (Task 3 didn't touch
-  it), built so Task 4 adds *behavior*, not new *shape*.
+  from — `threat_level` is now real and load-bearing (Task 4); Task 5's combat/attack scoring
+  should read it directly rather than inventing a parallel hostility signal.
 - **Regression gate**: `tests/test_balance.py` (20 sim-minute `DEFAULT` run, ≥80% survival)
   and `tests/test_factions.py` must stay green after every rung — run them explicitly, not
   just the new rung's own tests, before considering a task done.
-- **Statistical/scenario tests need empirical tuning, not guessed thresholds** — this was
-  true for Task 2's contention test and *much* more true for Task 3's raid test: the
-  `food_deficit_seconds` master-scarcity signal needed a widened consumption window to be
-  usable at all, and `scenarios.ASYMMETRIC` needed a persistent (not transient) handicap
-  before it produced directional raiding. Budget real iteration time — this is not a "guess
-  three constants and ship" rung.
+- **Statistical/scenario tests need empirical tuning, not guessed thresholds** — true for
+  Task 2's contention test, more true for Task 3's raid test, and most true yet for Task 4:
+  beyond the usual weight/threshold tuning, Task 4 needed a structural fix (the equilibrium
+  insight above) rather than just moving a constant. Budget real iteration time on every
+  future rung with a statistical/scenario test — this project does not have a "guess three
+  constants and ship" rung.
 - **A near-always-preparable task on the shared board is dangerous regardless of its score**
   — `assign_task_to_agent`'s fall-through-on-prepare-failure loop means *any* task type that
   reliably succeeds at `prepare()` can become a fallback of last resort no matter how low its
   cached score is, unless something stops the loop early. The `if task.priority <= 0: break`
-  fix in `TaskManager.assign_task_to_agent` (Task 3) is that stop — it's generic and will
-  matter again for `GuardTask`/`AttackTask` in Tasks 4-5, not just raiding.
+  fix in `TaskManager.assign_task_to_agent` (Task 3) is that stop, and Task 4's `GuardTask`
+  generation relies on it too (unconditional generation, scoring-only gating) — it will
+  matter again for `AttackTask` in Task 5.
+- **Coincidental agent presence must not be conflated with deliberate assignment** — Task 4's
+  guard-blocks-steal check only counts agents *currently assigned a `GuardTask` for that exact
+  building*, not just any nearby agent, because the bread storage point is also the `EatTask`
+  destination — "any nearby agent" would have given free deterrence from routine eating
+  traffic. The same distinction (assigned-to-do-X vs. merely-near) will likely matter again
+  for Task 5's "guard may attack a raider caught stealing."
