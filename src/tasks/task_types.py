@@ -7,6 +7,7 @@ class TaskType(Enum):
     COLLECT_PROCESSED_AND_DELIVER = auto()
     PATROL = auto()
     EAT = auto()
+    STEAL = auto()
 
 class TaskStatus(Enum):
     """Defines the possible states of a task."""

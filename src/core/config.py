@@ -123,7 +123,16 @@ UTILITY_BASE_VALUE_PROCESS_WHEAT = 750.0  # replaces PROCESS_WHEAT_TASK_PRIORITY
 UTILITY_BASE_VALUE_PROVISION = 100.0    # replaces PROVISION_TASK_PRIORITY (station-recipe fallback,
                                          # e.g. WATER->Bakery — no meaningful global stock target)
 UTILITY_DISTANCE_WEIGHT = 1.0           # multiplies raw grid-unit distance into a score cost
-UTILITY_CONSUMPTION_WINDOW_SECONDS = 60.0  # rolling window for SimMetrics recent-rate queries
+UTILITY_CONSUMPTION_WINDOW_SECONDS = 300.0  # rolling window for SimMetrics recent-rate queries.
+                                             # Widened from 60s during Task 3 tuning: with only
+                                             # 3 agents/faction eating roughly once per ~300s
+                                             # each, a 60s window frequently contains zero eat
+                                             # events even under real scarcity, causing
+                                             # food_deficit_seconds to fall back to its "abundant"
+                                             # sentinel (see FactionContext.compute_food_deficit_
+                                             # seconds) and masking genuine desperation from the
+                                             # raid scorer. 300s matches SimMetrics's own
+                                             # _EVENT_RETENTION_SECONDS ceiling.
 FOOD_DEFICIT_SECONDS_CAP = 1e6          # sentinel for "abundant" when consumption rate is ~0
 UTILITY_CONTENTION_WEIGHT = 2.0         # multiplies a node's contention_pressure into distance_cost
 
@@ -132,6 +141,30 @@ CONTENTION_BUMP_PER_DENIAL = 8.0        # added to a node's pressure on each cro
 CONTENTION_PRESSURE_CAP = 40.0          # ceiling; ~5 rapid denials saturate a node
 CONTENTION_DECAY_RATE = 1.0             # pressure units/sec removed every tick (full decay from cap: 40s)
 EVENT_LOG_MAX_SIZE = 500                # ring-buffer size for src/core/events.py
+
+# --- RAID (Plan 4 Task 3 — theft) ---
+# raid_score = UTILITY_BASE_VALUE_RAID * food_deficit_urgency(deficit_seconds) * haul_factor
+#              - distance_cost - risk_cost - UTILITY_RAID_PEACE_BIAS
+# Values below are empirically tuned (like Task 2's CONTENTION constants) against
+# tests/test_theft.py's ASYMMETRIC/DEFAULT scenario tests, not derived analytically — see
+# docs/plan-4-progress.md for the tuning process (widened UTILITY_CONSUMPTION_WINDOW_SECONDS,
+# scenarios.ASYMMETRIC's faction_bakeries lever, and these three constants all had to move
+# together before ASYMMETRIC produced directional raids without DEFAULT producing any).
+UTILITY_BASE_VALUE_RAID = 100.0         # comparable order of magnitude to BERRY/WHEAT base values —
+                                         # raiding isn't a "super task"; UTILITY_RAID_PEACE_BIAS is
+                                         # what keeps it strictly dominated in ordinary conditions.
+RAID_FOOD_DEFICIT_HORIZON_SECONDS = 500.0  # food_deficit_seconds at/below this -> urgency saturates
+                                            # toward 1.0 (steep ramp, see task._food_deficit_urgency).
+                                            # DEFAULT's observed deficit floor is ~1200s even under
+                                            # this widened consumption window — comfortable margin.
+UTILITY_RAID_PEACE_BIAS = 20.0          # constant handicap making raids strictly worse than a viable
+                                         # peaceful task under normal conditions — THE tuning constant
+                                         # for this rung; get this inequality right per the plan doc.
+RAID_STEAL_TIME_MULTIPLIER = 1.5        # steal Interact duration = DEFAULT_COLLECTION_TIME_FROM_STORAGE * this
+MAX_ACTIVE_STEAL_TASKS = 1              # cap on concurrent pending/assigned raid tasks per faction —
+                                         # generation is unconditional (not scarcity-gated); scoring
+                                         # alone decides whether the task is ever picked.
+STEAL_TASK_QUANTITY = DEFAULT_AGENT_INVENTORY_CAPACITY  # attempt a full single-trip carry per raid
 
 # Agent Action Timings (continued)
 DEFAULT_COLLECTION_TIME_FROM_STORAGE = 1.5 # Seconds to collect from a storage point

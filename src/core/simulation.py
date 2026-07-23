@@ -185,8 +185,11 @@ class Simulation:
             fid = faction.faction_id
             region = faction.home_region
 
+            bakery_counts = getattr(self.scenario, 'faction_bakeries', None) if self.scenario else None
+            num_bakeries = bakery_counts[fid] if bakery_counts and fid < len(bakery_counts) else config.PER_FACTION_BAKERIES
+
             mills = self._spawn_entity(Mill, config.PER_FACTION_MILLS, bounds=region, owner_faction_id=fid)
-            bakeries = self._spawn_entity(Bakery, config.PER_FACTION_BAKERIES, bounds=region, owner_faction_id=fid)
+            bakeries = self._spawn_entity(Bakery, num_bakeries, bounds=region, owner_faction_id=fid)
             self._spawn_entity(WaterSource, config.PER_FACTION_WELLS, bounds=region, owner_faction_id=fid)
 
             # Pre-stock bakeries
@@ -249,8 +252,12 @@ class Simulation:
         for faction in self.factions:
             fid = faction.faction_id
             region = faction.home_region
-            per_faction_sc = getattr(self.scenario, 'per_faction_agents', None) if self.scenario else None
-            per_faction = per_faction_sc if per_faction_sc is not None else config.PER_FACTION_AGENTS
+            agent_counts = getattr(self.scenario, 'faction_agent_counts', None) if self.scenario else None
+            if agent_counts and fid < len(agent_counts):
+                per_faction = agent_counts[fid]
+            else:
+                per_faction_sc = getattr(self.scenario, 'per_faction_agents', None) if self.scenario else None
+                per_faction = per_faction_sc if per_faction_sc is not None else config.PER_FACTION_AGENTS
 
             spawned = 0
             attempts = 0

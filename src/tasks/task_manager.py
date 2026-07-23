@@ -5,7 +5,7 @@ from typing import List, Dict, Optional, TYPE_CHECKING
 
 from pygame.math import Vector2
 
-from .task import Task, GatherAndDeliverTask, DeliverWheatToMillTask, EatTask
+from .task import Task, GatherAndDeliverTask, DeliverWheatToMillTask, EatTask, StealFromStorageTask
 from .task_types import TaskType, TaskStatus
 from ..resources.resource_types import ResourceType # Assuming this path
 from ..resources.mill import Mill # For checking Mill instances
@@ -91,6 +91,13 @@ class TaskManager:
         self.logger.debug(f"TaskManager: Created DeliverWheatToMillTask {task.task_id} for {quantity} WHEAT, P:{priority}.")
         return task
 
+    def create_steal_task(self, quantity: int, priority: int) -> Optional[Task]:
+        """Creates a new StealFromStorageTask (Plan 4 Task 3) and adds it to the pending list."""
+        task = StealFromStorageTask(priority=priority, quantity_to_steal=quantity)
+        self.add_task(task)
+        self.logger.debug(f"TaskManager: Created StealFromStorageTask {task.task_id} for "
+                           f"{quantity} BREAD, P:{priority}.")
+        return task
 
     def get_available_tasks(self) -> List[Task]:
         """Returns the current list of tasks on the job board (pending_tasks)."""
@@ -210,6 +217,16 @@ class TaskManager:
 
         # Iterate over a copy for safe removal, sorted by priority (already sorted by add_task)
         for i, task in enumerate(list(self.pending_tasks)): # Iterate a copy
+            # Board is sorted descending by score (add_task/_rescore_pending_tasks keep it that
+            # way) — once we reach a non-positive score, nothing remaining is worth doing.
+            # Doing nothing beats a net-negative action. This is what stops a peace_bias-
+            # dominated task (e.g. StealFromStorageTask, Plan 4 Task 3) from becoming a
+            # "fallback of last resort" whenever a higher-scored task's prepare() transiently
+            # fails (e.g. a wild node momentarily claimed by another agent) — without this, an
+            # always-preparable-but-low-scoring task would get reached anyway by simply
+            # continuing down the list, defeating the whole point of peace_bias.
+            if task.priority <= 0:
+                break
             # Pre-qualification checks (simplified version of old Agent._evaluate_and_select_task)
             # TODO: Enhance this pre-qualification logic
             can_perform_task = False
@@ -220,6 +237,9 @@ class TaskManager:
                    (agent.current_inventory['quantity'] < agent.inventory_capacity):
                     can_perform_task = True
             elif isinstance(task, DeliverWheatToMillTask):
+                if agent.current_inventory['quantity'] == 0: # Must have empty inventory
+                    can_perform_task = True
+            elif isinstance(task, StealFromStorageTask):
                 if agent.current_inventory['quantity'] == 0: # Must have empty inventory
                     can_perform_task = True
             else:
@@ -533,6 +553,24 @@ class TaskManager:
                                 target_dropoff_id=station.id
                             )
 
+        # --- Raid Task Generation (Plan 4 Task 3) ---
+        # Deliberately NOT gated on scarcity/threat here — that's what compute_score's
+        # food_deficit_urgency * peace_bias inequality is for. Generation just keeps ~1 raid
+        # candidate on the board per faction so it's available to be scored/picked when (and
+        # only when) it's actually worth it. No `if faction.at_war` anywhere.
+        active_steal_tasks = sum(
+            1 for task in self.pending_tasks
+            if isinstance(task, StealFromStorageTask)
+        )
+        active_steal_tasks += sum(
+            1 for task in self.assigned_tasks.values()
+            if isinstance(task, StealFromStorageTask)
+        )
+        if active_steal_tasks < config.MAX_ACTIVE_STEAL_TASKS:
+            self.create_steal_task(
+                quantity=config.STEAL_TASK_QUANTITY,
+                priority=0,  # overwritten by the next _rescore_pending_tasks call
+            )
 
     def get_task_by_id(self, task_id: uuid.UUID) -> Optional[Task]:
         """Retrieves a task by its ID from any of the lists."""

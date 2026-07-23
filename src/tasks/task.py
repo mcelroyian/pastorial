@@ -50,6 +50,18 @@ def _nearest_distance_cost(home_centroid, positions_and_pressure, weight: float,
     )
 
 
+def _food_deficit_urgency(deficit_seconds: float) -> float:
+    """Steep 0->1 ramp as food_deficit_seconds approaches 0 (Plan 4 Task 3). Distinct from the
+    gather/process urgency curve (stock_ratio-based): this is a seconds-of-runway signal — the
+    whole point of theft's scoring is that it responds to imminent starvation, not "stock is
+    below target." Reuses UTILITY_URGENCY_EXPONENT as the shared shape parameter."""
+    horizon = config.RAID_FOOD_DEFICIT_HORIZON_SECONDS
+    if horizon <= 0:
+        return 0.0
+    ratio = min(1.0, deficit_seconds / horizon)
+    return (1.0 - ratio) ** config.UTILITY_URGENCY_EXPONENT
+
+
 # ---------------------------------------------------------------------------
 # TaskStep abstraction
 # ---------------------------------------------------------------------------
@@ -644,6 +656,229 @@ class DeliverWheatToMillTask(Task):
         if idx == 3 and mill:
             return f"Delivering {self.resource_to_retrieve.name} to {mill.position}"
         return f"Process {self.resource_to_retrieve.name} ({self.status.name})"
+
+
+# ---------------------------------------------------------------------------
+# StealFromStorageTask — Plan 4 Task 3 (Rung 2: Theft)
+# ---------------------------------------------------------------------------
+
+class StealFromStorageTask(Task):
+    """Move to an ENEMY faction's storage, take bread, carry it home, deposit it.
+
+    No `if faction.at_war` scripting anywhere — TaskManager generates this task
+    unconditionally (see _generate_tasks_if_needed) and it only ever outscores peaceful tasks
+    via compute_score when the faction is food-desperate. See compute_score for the
+    load-bearing utility formula (peace_bias vs. food_deficit_urgency).
+    """
+
+    def __init__(self, priority: int, quantity_to_steal: int):
+        super().__init__(TaskType.STEAL, priority)
+        self.resource_to_steal: ResourceType = ResourceType.BREAD
+        self.quantity_to_steal: int = quantity_to_steal
+        self.target_storage_ref = None          # enemy storage (steal source)
+        self.target_dropoff_ref = None          # own storage (deposit target)
+        self.victim_faction_id: Optional[int] = None
+        self.quantity_stolen: int = 0
+        self.quantity_deposited: int = 0
+        self.reserved_at_storage_for_pickup_quantity: int = 0
+        self.reserved_at_dropoff_quantity: int = 0
+
+    def prepare(self, agent: 'Agent', resource_manager: 'ResourceManager') -> bool:
+        self._update_timestamp()
+        self.status = TaskStatus.PREPARING
+
+        faction_id = getattr(agent, 'owner_faction_id', None)
+
+        if agent.current_inventory['quantity'] > 0:
+            self.error_message = "Agent inventory not empty."
+            self.status = TaskStatus.FAILED
+            return False
+
+        qty_to_reserve = min(self.quantity_to_steal, agent.inventory_capacity)
+
+        # 1. Reserve BREAD for pickup at an ENEMY faction's storage — force=True bypasses the
+        # Plan 3 faction gate. Perfect information (Task 3 simplification, per the doc): try
+        # the enemy storage point with the largest actual BREAD stock first.
+        enemy_storage = sorted(
+            (sp for sp in resource_manager.storage_points
+             if sp.owner_faction_id not in (None, faction_id)
+             and sp.has_resource(self.resource_to_steal, 1)),
+            key=lambda sp: sp.stored_resources.get(self.resource_to_steal, 0),
+            reverse=True,
+        )
+        for sp in enemy_storage:
+            reserved = sp.reserve_for_pickup(self.task_id, self.resource_to_steal, qty_to_reserve,
+                                              faction_id=faction_id, force=True)
+            if reserved > 0:
+                self.target_storage_ref = sp
+                self.victim_faction_id = sp.owner_faction_id
+                self.reserved_at_storage_for_pickup_quantity = reserved
+                break
+
+        if not self.target_storage_ref:
+            self.error_message = "No enemy BREAD available to steal."
+            self.status = TaskStatus.FAILED
+            return False
+
+        # 2. Reserve space at own-faction storage for the deposit leg — normal, faction-gated
+        # path (own storage is always a plain StoragePoint here, never a processing station).
+        own_storage = resource_manager.storage_points_for(faction_id)
+        for dropoff in sorted(
+            own_storage, key=lambda sp: (sp.position - self.target_storage_ref.position).length_squared()
+        ):
+            reserved = dropoff.reserve_space(self.task_id, self.resource_to_steal,
+                                              self.reserved_at_storage_for_pickup_quantity,
+                                              faction_id=faction_id)
+            if reserved > 0:
+                self.target_dropoff_ref = dropoff
+                self.reserved_at_dropoff_quantity = reserved
+                break
+
+        if not self.target_dropoff_ref:
+            self.target_storage_ref.release_pickup_reservation(
+                self.task_id, self.resource_to_steal, self.reserved_at_storage_for_pickup_quantity)
+            self.reserved_at_storage_for_pickup_quantity = 0
+            self.error_message = "No own-faction storage space for stolen bread."
+            self.status = TaskStatus.FAILED
+            return False
+
+        if not agent.grid.find_walkable_adjacent_tile(self.target_storage_ref.position):
+            self.target_storage_ref.release_pickup_reservation(
+                self.task_id, self.resource_to_steal, self.reserved_at_storage_for_pickup_quantity)
+            self.reserved_at_storage_for_pickup_quantity = 0
+            self.target_dropoff_ref.release_reservation(self.task_id, self.reserved_at_dropoff_quantity)
+            self.reserved_at_dropoff_quantity = 0
+            self.error_message = "No walkable tile adjacent to enemy storage."
+            self.status = TaskStatus.FAILED
+            return False
+
+        storage = self.target_storage_ref
+        dropoff = self.target_dropoff_ref
+        grid = agent.grid
+        steal_time = (getattr(agent.config, 'DEFAULT_COLLECTION_TIME_FROM_STORAGE',
+                               agent.config.DEFAULT_GATHERING_TIME)
+                      * config.RAID_STEAL_TIME_MULTIPLIER)
+
+        self.steps = [
+            MoveToStep(lambda: grid.find_walkable_adjacent_tile(storage.position)),
+            InteractStep(
+                lambda: storage.id,
+                "STEAL",
+                lambda a, t: steal_time,
+                self._on_steal_complete,
+            ),
+            MoveToStep(lambda: grid.find_walkable_adjacent_tile(dropoff.position)),
+            InteractStep(
+                lambda: dropoff.id,
+                "DELIVER_RESOURCE",
+                lambda a, t: a.config.DEFAULT_DELIVERY_TIME,
+                self._on_deposit_complete,
+            ),
+        ]
+        self.current_step_index = 0
+        self.status = TaskStatus.IN_PROGRESS
+        self._submit_next_step(agent, resource_manager)
+        return self.status != TaskStatus.FAILED
+
+    def _on_steal_complete(self, agent, task, resource_manager):
+        can_carry = agent.inventory_capacity - agent.current_inventory.get('quantity', 0)
+        amount = min(can_carry, self.reserved_at_storage_for_pickup_quantity)
+        if amount > 0:
+            collected = self.target_storage_ref.collect_reserved_pickup(
+                self.task_id, self.resource_to_steal, amount
+            )
+            if collected > 0:
+                inv_type = agent.current_inventory.get('resource_type')
+                if inv_type is not None and inv_type != self.resource_to_steal:
+                    self.status = TaskStatus.FAILED
+                    self.error_message = "Inventory type mismatch during steal."
+                    return
+                agent.current_inventory['resource_type'] = self.resource_to_steal
+                agent.current_inventory['quantity'] = (
+                    agent.current_inventory.get('quantity', 0) + collected
+                )
+                self.quantity_stolen += collected
+                events = getattr(resource_manager, 'events', None)
+                if events is not None:
+                    events.record(
+                        "theft",
+                        faction_id=getattr(agent, 'owner_faction_id', None),
+                        other_faction_id=self.victim_faction_id,
+                        position=self.target_storage_ref.position,
+                        resource_type=self.resource_to_steal.name,
+                        detail=str(collected),
+                    )
+        if self.quantity_stolen == 0:
+            self.status = TaskStatus.FAILED
+            self.error_message = "Failed to steal bread."
+
+    def _on_deposit_complete(self, agent, task, resource_manager):
+        amount = agent.current_inventory.get('quantity', 0)
+        if amount <= 0 or agent.current_inventory.get('resource_type') != self.resource_to_steal:
+            return  # Nothing to deposit; task completes normally
+        delivered = self.target_dropoff_ref.commit_reservation_to_storage(
+            self.task_id, self.resource_to_steal, amount
+        )
+        if delivered > 0:
+            agent.current_inventory['quantity'] = (
+                agent.current_inventory.get('quantity', 0) - delivered
+            )
+            self.quantity_deposited += delivered
+            self.reserved_at_dropoff_quantity -= delivered
+            if agent.current_inventory.get('quantity', 0) == 0:
+                agent.current_inventory['resource_type'] = None
+        else:
+            self.status = TaskStatus.FAILED
+            self.error_message = "Failed to deposit stolen bread."
+
+    def compute_score(self, faction_ctx: 'FactionContext', resource_manager: 'ResourceManager') -> float:
+        enemy_storage = [
+            sp for sp in resource_manager.storage_points
+            if sp.owner_faction_id not in (None, faction_ctx.faction_id)
+            and sp.stored_resources.get(self.resource_to_steal, 0) > 0
+        ]
+        if not enemy_storage:
+            return -1e9  # disqualifying sentinel — no reachable target, never crashes the sort
+
+        urgency = _food_deficit_urgency(faction_ctx.food_deficit_seconds)
+        best_stock = max(sp.stored_resources.get(self.resource_to_steal, 0) for sp in enemy_storage)
+        # expected_haul: perfect information (Task 3 simplification, per the doc) — capped at a
+        # typical single-trip carry so one large enemy stockpile can't dominate the score
+        # independent of what a raider can physically bring home in one run.
+        haul_factor = min(best_stock, config.DEFAULT_AGENT_INVENTORY_CAPACITY)
+
+        positions_and_pressure = [(sp.position, 0.0) for sp in enemy_storage]
+        distance_cost = _nearest_distance_cost(
+            faction_ctx.home_centroid, positions_and_pressure, config.UTILITY_DISTANCE_WEIGHT
+        )
+        risk_cost = 0.0  # Task 3: no defenders exist yet. Task 4 wires GuardTask-driven risk here.
+
+        return (config.UTILITY_BASE_VALUE_RAID * urgency * haul_factor
+                - distance_cost - risk_cost - config.UTILITY_RAID_PEACE_BIAS)
+
+    def cleanup(self, agent: 'Agent', resource_manager: 'ResourceManager', success: bool):
+        self._update_timestamp()
+        if self.target_storage_ref and self.reserved_at_storage_for_pickup_quantity > 0:
+            self.target_storage_ref.release_pickup_reservation(
+                self.task_id, self.resource_to_steal, self.reserved_at_storage_for_pickup_quantity)
+            self.reserved_at_storage_for_pickup_quantity = 0
+        if self.target_dropoff_ref and self.reserved_at_dropoff_quantity > 0:
+            self.target_dropoff_ref.release_reservation(self.task_id, self.reserved_at_dropoff_quantity)
+            self.reserved_at_dropoff_quantity = 0
+
+    def get_description(self) -> str:
+        storage = self.target_storage_ref
+        dropoff = self.target_dropoff_ref
+        idx = self.current_step_index
+        if idx == 0 and storage:
+            return f"Moving to raid target at {storage.position}"
+        if idx == 1 and storage:
+            return f"Stealing {self.resource_to_steal.name} at {storage.position}"
+        if idx == 2 and dropoff:
+            return f"Moving home with stolen goods to {dropoff.position}"
+        if idx == 3 and dropoff:
+            return f"Depositing stolen {self.resource_to_steal.name} at {dropoff.position}"
+        return f"Steal {self.resource_to_steal.name} ({self.status.name})"
 
 
 # ---------------------------------------------------------------------------

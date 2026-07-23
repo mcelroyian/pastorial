@@ -280,7 +280,7 @@ class StoragePoint:
         return total_reserved
 
     def reserve_for_pickup(self, task_id: uuid.UUID, resource_type: ResourceType, quantity: int,
-                           faction_id: Optional[int] = None) -> int:
+                           faction_id: Optional[int] = None, force: bool = False) -> int:
         """
         Attempts to reserve a quantity of an existing resource for a task to pick up.
 
@@ -288,12 +288,15 @@ class StoragePoint:
             task_id: The ID of the task making the pickup reservation.
             resource_type: The type of resource to reserve.
             quantity: The amount of resource to reserve for pickup.
+            force: Bypasses the faction gate (Plan 4 Task 3 theft path — StealFromStorageTask
+                is the only caller). Downstream collect_reserved_pickup/release_pickup_reservation
+                have never checked faction, so no other change is needed to complete the bypass.
 
         Returns:
             The actual quantity reserved for pickup. Can be less than requested if
             not enough is available or 0 if type not present.
         """
-        if not self._faction_allowed(faction_id):
+        if not force and not self._faction_allowed(faction_id):
             self.logger.debug(f"StoragePoint {self.position} reserve_for_pickup: faction {faction_id} blocked (owner={self.owner_faction_id}).")
             return 0
         if self.accepted_resource_types is not None and resource_type not in self.accepted_resource_types:

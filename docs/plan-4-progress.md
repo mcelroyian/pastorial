@@ -1,11 +1,12 @@
 # Plan 4 (Emergent Conflict) — Progress Handoff
 
-**Plan doc:** `docs/plan-4-emergent-conflict.md` — read Task 3 there before continuing.
+**Plan doc:** `docs/plan-4-emergent-conflict.md` — read Task 4 there before continuing.
 **Prerequisite docs:** `docs/plan-3-factions.md` (factions, done), `docs/balance-notes.md` (tuning history).
 
-**Branch:** `main` — all work committed and pushed directly, no PRs.
+**Branch:** `main` — work is uncommitted as of this handoff (Task 3 implementation complete,
+tests green, not yet committed — confirm with the user before committing/pushing).
 
-**Start reading here, then the plan doc for the Task 3 spec.**
+**Start reading here, then the plan doc for the Task 4 spec.**
 
 ---
 
@@ -15,14 +16,14 @@
 |------|-------------|--------|
 | Task 1 | Utility-based task scoring (the emergence engine) | ✅ Done (`b1f93d6`) |
 | Task 2 | Rung 1 — Contested wild resources (no violence) | ✅ Done (`b4063af`) |
-| Task 3 | Rung 2 — Theft (`StealFromStorageTask`) | 🔴 **Next up** — not started |
-| Task 4 | Rung 3 — Defense (`GuardTask`, threat response) | ⬜ Not started |
+| Task 3 | Rung 2 — Theft (`StealFromStorageTask`) | ✅ Done (uncommitted) |
+| Task 4 | Rung 3 — Defense (`GuardTask`, threat response) | 🔴 **Next up** — not started |
 | Task 5 | Rung 4 — Combat | ⬜ Not started |
 | Task 6 | Tuning & the emergence report | ⬜ Not started |
 
-Full test suite: **60 passed** as of `b4063af` (`pytest` from repo root). Peaceful baseline
-(`tests/test_balance.py`, `tests/test_factions.py`) is the regression gate — must stay green
-through every future rung.
+Full test suite: **71 passed** (`pytest` from repo root; 60 baseline + 11 new for Task 3).
+Peaceful baseline (`tests/test_balance.py`, `tests/test_factions.py`) is the regression gate —
+must stay green through every future rung.
 
 ---
 
@@ -77,80 +78,135 @@ pressure" that feeds back into scoring.
   (`GatherAndDeliverTask`) that needs it. Read via `getattr(resource_manager, 'events', None)`.
 - **Node-selection loop** (`GatherAndDeliverTask.prepare()`): only the agent's *first
   viable candidate* (nearest node with stock) counts as a contention signal if it's held by
-  a rival faction. **Important lesson learned**: an earlier version recorded contention for
-  *every* already-claimed node encountered while scanning past it to find an open one — this
-  saturated the event log identically for both `SCARCITY` and `DEFAULT` scenarios within
-  ~180 sim-seconds (both factions are drawing on the same 30-node wild pool more or less
-  constantly), destroying the differentiating signal the Task 2 verify criterion needs.
-  Narrowing to "was my *preferred* choice specifically taken by the enemy" fixed it.
+  a rival faction — narrowing from "every already-claimed node encountered while scanning"
+  to "was my *preferred* choice specifically taken by the enemy" was needed to keep the
+  DEFAULT-vs-SCARCITY signal from saturating identically.
 - **Score integration**: `_nearest_distance_cost` widened to take `(position,
-  contention_pressure)` pairs + a `contention_weight` param (default `0.0`, so the
-  `DeliverWheatToMillTask`/mill call site — mills are never contested — is a one-line,
-  no-new-mechanism adaptation). Because it's a `min(...)` over combined distance+contention
-  cost, a contested-but-close node can lose to a farther-but-uncontested one — that alone
-  produces "contested areas score lower, safe nodes gain," no separate boost logic needed.
-- **UI**: `TaskStatusDisplay` gained a "Recent Events" panel section (`events.recent(5)`,
-  newest first). Confirmed visually — note the existing panel has no global height budget
-  across its 5 sections, so with a busy task board the events section can get pushed off
-  the visible area (pre-existing characteristic, not new).
-- **Tests**: `tests/test_events.py` (3 tests). The scenario/statistical test
-  (`test_scarcity_has_more_contention_than_default_over_seeds`) needed real empirical
-  tuning of both run length and threshold — see the "Important lesson learned" note above.
-  Landed on a **60 sim-second** window (both scenarios' counts still growing, not yet
-  saturated): `DEFAULT` sums to ~5 events across 3 seeds, `SCARCITY` to ~85+, a wide margin.
-  `total_default <= 10` is the "rare" bound.
+  contention_pressure)` pairs + a `contention_weight` param (default `0.0`).
+- **UI**: `TaskStatusDisplay` gained a "Recent Events" panel section (`events.recent(5)`).
+- **Tests**: `tests/test_events.py` (3 tests), including a seeded statistical scenario test.
+
+### Task 3 — Theft / `StealFromStorageTask` (uncommitted)
+
+First deliberately hostile task: an agent walks to an **enemy** faction's storage, steals
+bread (bypassing the Plan 3 faction gate via an explicit bypass), carries it home, deposits
+it — purely emergent, gated only by utility scoring, no `if faction.at_war` anywhere.
+
+- **`StoragePoint.reserve_for_pickup`** (`src/resources/storage_point.py`) gained a
+  `force: bool = False` param that skips the `_faction_allowed` check when `True`. This is
+  the *entire* bypass mechanism — `collect_reserved_pickup`/`release_pickup_reservation`
+  were never faction-gated in the first place, so nothing downstream needed to change.
+  Default-`False` keeps every pre-existing call site (`EatTask`, `DeliverWheatToMillTask`)
+  provably untouched (regression-tested directly in `tests/test_storage_point.py`).
+- **`StealFromStorageTask`** (`src/tasks/task.py`, placed after `DeliverWheatToMillTask` —
+  its closer structural template) follows the same declarative `MoveToStep`/`InteractStep`
+  pattern as every other task: reserve pickup at the richest enemy storage holding BREAD
+  (`force=True`) → move → `InteractStep("STEAL", ...)` → move home → deposit via the
+  completely normal `reserve_space`/`commit_reservation_to_storage` path (depositing into
+  your *own* storage needs no bypass). Emits a `theft(faction_id=raider,
+  other_faction_id=victim, position, resource_type, detail=amount)` event to the Task 2
+  `EventLog` at the moment bread is actually collected — same "EventLog is the sole record"
+  discipline as `claim_contention`, no parallel `SimMetrics` counter.
+- **Scoring** (`StealFromStorageTask.compute_score`): `UTILITY_BASE_VALUE_RAID *
+  food_deficit_urgency(deficit_seconds) * haul_factor - distance_cost - risk_cost -
+  UTILITY_RAID_PEACE_BIAS`. `food_deficit_urgency` (new helper in `task.py`) is a steep 0→1
+  ramp as `food_deficit_seconds` approaches 0, reusing `UTILITY_URGENCY_EXPONENT` as its
+  shape parameter, keyed off a new `RAID_FOOD_DEFICIT_HORIZON_SECONDS` config constant.
+  `haul_factor` is the richest reachable enemy storage's actual BREAD stock (perfect
+  information, per the doc), **capped at `DEFAULT_AGENT_INVENTORY_CAPACITY`** so one large
+  enemy stockpile can't make `peace_bias` untunable. `risk_cost` stays `0.0` (Task 4 wires it).
+- **Generation** (`TaskManager._generate_tasks_if_needed`): unconditional, capped at
+  `MAX_ACTIVE_STEAL_TASKS = 1` pending/assigned raid task per faction — no scarcity gate on
+  the generation side; scoring alone decides whether it's ever picked.
+- **Critical bug found and fixed during implementation — a scoring floor in
+  `assign_task_to_agent`.** A persistently-present, almost-always-preparable raid task (enemy
+  storage nearly always has *some* bread) became a "fallback of last resort" whenever a
+  higher-scored peaceful task's `prepare()` transiently failed (e.g. a wild node momentarily
+  claimed by another agent) — `assign_task_to_agent`'s loop just falls through to the next
+  candidate on `prepare()` failure, so a deeply-negative-scored-but-always-succeeding task
+  would eventually get reached regardless of how negative `peace_bias` made its score. This
+  showed up as real theft events in the `DEFAULT` scenario during a routine regression run
+  (`tests/test_events.py`'s contention test started failing — a knock-on effect, not a direct
+  assertion on theft). **Fix**: `assign_task_to_agent` now `break`s out of its
+  (score-descending-sorted) candidate loop the moment it hits a task with `priority <= 0` —
+  doing nothing beats a net-negative action. This is generic (applies to any current or future
+  task type, not raid-specific) and is *the* mechanism that makes `peace_bias` actually mean
+  something; without it, no amount of tuning `peace_bias` could have kept raiding out of
+  `DEFAULT`, because the raid task would always be reachable as a fallback.
+- **Empirical tuning — the food_deficit_seconds signal was too spiky to use as-is.** With
+  only 3-6 agents per faction eating infrequently (~once per 300s each), a 60s rolling
+  consumption window frequently contained zero eat events even under real scarcity, so
+  `FactionContext.food_deficit_seconds` kept falling back to its "abundant" sentinel
+  (`FOOD_DEFICIT_SECONDS_CAP`) regardless of actual stock level. Fixed by widening
+  `UTILITY_CONSUMPTION_WINDOW_SECONDS` from 60s to 300s (matches `SimMetrics`'s own
+  `_EVENT_RETENTION_SECONDS` ceiling) — this is a Task 1 constant, but Task 3 is the first
+  real consumer of `food_deficit_seconds`, so its noisiness had never been exercised before.
+  Separately, `scenarios.ASYMMETRIC`'s original tuning (initial-bread gap only) self-corrected
+  too fast under normal production for real desperation to build. **Tried and rejected**:
+  bumping `per_faction_agents` for both factions — strains both equally via random contention
+  on the *shared* wild-node pool, which swamped the deliberate initial-bread asymmetry and
+  produced non-directional (roughly 50/50) raiding. **What worked**: a new
+  `Scenario.faction_bakeries` field (`src/core/scenarios.py`, wired into
+  `Simulation._spawn_faction_buildings`) — `ASYMMETRIC` now gives faction 1 zero bakeries
+  (`faction_bakeries=[1, 0]`), a *persistent* production handicap (can mill flour, can never
+  bake bread) instead of a transient one, so it reliably runs down over time regardless of
+  seed. Final tuned constants: `UTILITY_BASE_VALUE_RAID=100.0`,
+  `RAID_FOOD_DEFICIT_HORIZON_SECONDS=500.0`, `UTILITY_RAID_PEACE_BIAS=20.0` — verified against
+  `DEFAULT`'s observed deficit floor of ~1200s (comfortable margin) and `ASYMMETRIC` producing
+  exactly one directional raid (faction 1 → faction 0, zero reverse) in 5/6 seeds tested.
+- **Tests**: `tests/test_storage_point.py` (+3: normal gate, force bypass, force-omitted
+  regression), `tests/test_task_scoring_raid.py` (5: abundance-low-score, disqualified
+  sentinel when no enemy bread, monotonic ramp, urgency-shape unit test, severe-deficit
+  crossover vs. gather), `tests/test_theft.py` (3: `ASYMMETRIC` directional raids over 3
+  seeds, `DEFAULT` zero raids over 3 seeds, theft event field sanity).
+- **Manual sanity**: `main.py` has no CLI scenario switch (hardcodes `Simulation()` =
+  `DEFAULT` in `GameLoop.__init__`), so a live visual check of `ASYMMETRIC` raiding wasn't
+  possible without a temporary code change. Verified DEFAULT renders/runs cleanly via the
+  `run` skill (no crashes, task board and event panel look normal), and verified
+  `ASYMMETRIC`'s raid behavior headlessly via deterministic seeded event-log traces (bread
+  visibly transfers faction 0 → faction 1's storage at the same tick a `theft` event fires).
+  If a live visual check matters going forward, worth adding a `--scenario` CLI flag to
+  `main.py`/`GameLoop` in a later task.
 
 ---
 
 ## What Comes Next
 
-### Task 3 — Rung 2: Theft (`StealFromStorageTask`)
+### Task 4 — Rung 3: Defense (`GuardTask`, threat response)
 
-Per `docs/plan-4-emergent-conflict.md`, Task 3 section:
+Per `docs/plan-4-emergent-conflict.md`, Task 4 section:
 
-- **`StealFromStorageTask(Task)`**: steps = `MoveTo(enemy storage)` → `Interact("STEAL",
-  duration ~ DEFAULT_COLLECTION_TIME_FROM_STORAGE * 1.5)` → withdraw up to inventory
-  capacity (bypassing the faction gate via an explicit `force=True`/steal path on
-  `StoragePoint` — the Plan 3 gate must stay intact for normal ops) → `MoveTo(own storage)`
-  → deposit. Follow the existing declarative `TaskStep`/`MoveToStep`/`InteractStep` pattern
-  from `src/tasks/task.py` — don't hand-roll a new step mechanism.
-- **Scoring is where the emergence lives** — this is the load-bearing design point of the
-  whole phase: `raid_score ≈ food_deficit_urgency * expected_haul - distance_cost -
-  risk_cost - peace_bias`.
-  - `food_deficit_urgency`: from `FactionContext.food_deficit_seconds` (already built in
-    Task 1 — this is exactly the "seconds of food remaining" signal it exists for).
-  - `expected_haul`: start with perfect information (read the target storage's actual
-    stock) — note the simplification in a code comment; scouting/memory is explicitly
-    out of scope unless time permits.
-  - `risk_cost`: this is the field Task 1 wired to `0.0` and Task 2 partially activated for
-    gather tasks — Task 3 doesn't need defenders yet (that's Task 4's `GuardTask`), but
-    should still route through the same named term.
-  - `peace_bias`: a constant that must make raiding strictly worse than any viable peaceful
-    option. **Get this inequality right and everything else follows** — raiding should only
-    win when gathering genuinely can't meet the deficit (no reachable wild food, or too
-    slow). This is the single most important tuning constant in this rung.
-- **`StoragePoint` steal path**: add an explicit bypass of the Plan 3 faction gate
-  (`can_accept`/`reserve_space`/`reserve_for_pickup` currently check `_faction_allowed` —
-  see `src/resources/storage_point.py`), gated behind an explicit `force=True` or similar,
-  so normal delivery/pickup paths are provably untouched. Unit-test both paths.
-- **Events**: emit `theft(victim_faction, raider_faction, amount, position)` to the Task 2
-  `EventLog` (`src/core/events.py`) — same `record(event_type, **fields)` call shape as
-  `claim_contention`. Victims react to this in Task 4 (event-driven "witnessing," not
-  line-of-sight, per the doc — keep v1 simple).
-- **Verify** (from the doc): scenario test on `ASYMMETRIC` (≥3 seeds) — poor faction raids
-  rich faction, bread flows measurably A→B via theft metrics. Scenario test on `DEFAULT`
-  (≥3 seeds) — zero or near-zero raids. Unit test: steal path works despite the faction
-  gate; normal path stays gated. **The peaceful balance test must stay green** — same
-  regression gate as Tasks 1 and 2.
+- **`FactionContext.threat_level`**: currently inert (`0.0`), needs to become a decaying
+  accumulator fed by hostility events against the faction — theft (now real, from Task 3)
+  weighted high, contention (Task 2) weighted low. Decay over sim-minutes so peace can
+  return. The `EventLog` (`src/core/events.py`) already has everything needed to compute
+  this: `theft` events carry `other_faction_id` = victim, so a faction can query "how much
+  have I been victimized recently" directly from the event log.
+- **`GuardTask`**: agent moves to own storage/building and loiters — reuse/extend
+  `PatrolTask`'s waypoint pattern. Score scales with `threat_level` and stock worth
+  protecting; competes against economic *and raid* tasks on the same board (guards don't
+  gather).
+- **Guard effect (nonviolent v1)**: a raider's `InteractStep("STEAL", ...)` should fail if
+  ≥N enemy agents are within `config.GUARD_RADIUS` of the target when the steal begins — add
+  a proximity check inside `StealFromStorageTask._on_steal_complete` (or a new step
+  precondition). Failed raid should still emit an event and raise the raider's perceived
+  risk of that target — this is exactly the `risk_cost` term already wired to `0.0` in both
+  `GatherAndDeliverTask.compute_score` (from Task 1) and `StealFromStorageTask.compute_score`
+  (from Task 3): Task 4 activates it, no new term needed.
+- **Requires** `AgentManager.get_agents_near(pos, radius, faction_id=...)` — doesn't exist
+  yet. Linear scan is fine at current scale (~12 agents total); leave a comment, not an
+  optimization.
 
-### Before starting Task 3
+### Before starting Task 4
 
-- Re-run `pytest` from a clean checkout to confirm `b4063af`'s state is still green (should
-  be, but confirm before layering more on top).
-- Skim `docs/balance-notes.md`'s "Balance levers for Phase 4" section — it already names
-  the levers for inducing scarcity (raise `BAKERY_PROCESSING_SPEED`, reduce
-  `INITIAL_BAKERIES`, increase `INITIAL_AGENTS`) if `ASYMMETRIC`'s current tuning doesn't
-  produce raids readily.
+- Re-run `pytest` from a clean checkout to confirm this handoff's state is still green (71
+  passed) before layering more on top.
+- Read the "Critical bug found and fixed" note above (`assign_task_to_agent`'s score-floor
+  `break`) before adding `GuardTask` to the board — it's a generic mechanism that will also
+  govern whether guarding ever gets picked, not just raiding.
+- `UTILITY_CONSUMPTION_WINDOW_SECONDS` is now 300s (was 60s) — if Task 4's `threat_level`
+  decay or any other new signal depends on shorter-window responsiveness, this is the
+  constant to revisit.
 
 ---
 
@@ -165,14 +221,23 @@ Per `docs/plan-4-emergent-conflict.md`, Task 3 section:
 - **Every accumulator must decay, and decay should be lazy/query-time or piggyback an
   existing per-tick hook** — `SimMetrics`'s rolling windows prune lazily at query time;
   `ResourceNode.contention_pressure` decays inside the node's existing `update(dt)` (no new
-  timer). Look for an existing tick hook before adding a new one.
+  timer). Look for an existing tick hook before adding a new one. `threat_level` (Task 4)
+  should follow the same discipline.
 - **`FactionContext` and `EventLog` are the two extension points** every later rung reads
-  from — `threat_level` on `FactionContext` and the `EventLog` ring buffer are both
-  explicitly inert/generic today, built so Task 3+ add *behavior*, not new *shape*.
+  from — `threat_level` on `FactionContext` is still inert/generic today (Task 3 didn't touch
+  it), built so Task 4 adds *behavior*, not new *shape*.
 - **Regression gate**: `tests/test_balance.py` (20 sim-minute `DEFAULT` run, ≥80% survival)
   and `tests/test_factions.py` must stay green after every rung — run them explicitly, not
   just the new rung's own tests, before considering a task done.
-- **Statistical/scenario tests need empirical tuning, not guessed thresholds** — Task 2's
-  contention test required actually running the simulation at several checkpoints to find a
-  run length where the `SCARCITY` vs `DEFAULT` signal was both real and not yet washed out
-  by saturation. Budget time for this on Task 3's `ASYMMETRIC` raid test too.
+- **Statistical/scenario tests need empirical tuning, not guessed thresholds** — this was
+  true for Task 2's contention test and *much* more true for Task 3's raid test: the
+  `food_deficit_seconds` master-scarcity signal needed a widened consumption window to be
+  usable at all, and `scenarios.ASYMMETRIC` needed a persistent (not transient) handicap
+  before it produced directional raiding. Budget real iteration time — this is not a "guess
+  three constants and ship" rung.
+- **A near-always-preparable task on the shared board is dangerous regardless of its score**
+  — `assign_task_to_agent`'s fall-through-on-prepare-failure loop means *any* task type that
+  reliably succeeds at `prepare()` can become a fallback of last resort no matter how low its
+  cached score is, unless something stops the loop early. The `if task.priority <= 0: break`
+  fix in `TaskManager.assign_task_to_agent` (Task 3) is that stop — it's generic and will
+  matter again for `GuardTask`/`AttackTask` in Tasks 4-5, not just raiding.

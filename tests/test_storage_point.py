@@ -92,3 +92,38 @@ def test_release_pickup_reservation_keeps_stock():
     assert released is True
     assert task_id not in sp.pickup_reservations
     assert sp.stored_resources.get(ResourceType.BERRY, 0) == 5  # stock unchanged
+
+
+# --- Plan 4 Task 3: force bypass on reserve_for_pickup (theft path) ---
+
+def test_reserve_for_pickup_blocks_other_faction_by_default():
+    sp = _sp(capacity=20, types=[ResourceType.BREAD])
+    sp.owner_faction_id = 0
+    sp.stored_resources[ResourceType.BREAD] = 8
+    task_id = uuid.uuid4()
+    reserved = sp.reserve_for_pickup(task_id, ResourceType.BREAD, 5, faction_id=1)
+    assert reserved == 0
+    assert task_id not in sp.pickup_reservations
+
+
+def test_reserve_for_pickup_force_bypasses_faction_gate():
+    sp = _sp(capacity=20, types=[ResourceType.BREAD])
+    sp.owner_faction_id = 0
+    sp.stored_resources[ResourceType.BREAD] = 8
+    task_id = uuid.uuid4()
+    reserved = sp.reserve_for_pickup(task_id, ResourceType.BREAD, 5, faction_id=1, force=True)
+    assert reserved == 5
+    collected = sp.collect_reserved_pickup(task_id, ResourceType.BREAD, max_quantity_agent_can_carry=10)
+    assert collected == 5
+    assert sp.stored_resources.get(ResourceType.BREAD, 0) == 3
+
+
+def test_reserve_for_pickup_normal_path_still_gated_when_force_omitted():
+    """Regression check: force defaults to False, so every pre-existing call site (EatTask,
+    DeliverWheatToMillTask) is provably unaffected by the Task 3 bypass."""
+    sp = _sp(capacity=20, types=[ResourceType.BREAD])
+    sp.owner_faction_id = 0
+    sp.stored_resources[ResourceType.BREAD] = 8
+    task_id = uuid.uuid4()
+    reserved = sp.reserve_for_pickup(task_id, ResourceType.BREAD, 5, faction_id=1)  # no force kwarg
+    assert reserved == 0
